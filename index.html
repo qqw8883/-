@@ -1,1943 +1,859 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { initializeApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInAnonymously, 
-  signInWithCustomToken, 
-  onAuthStateChanged 
-} from 'firebase/auth';
-import { 
-  getFirestore, 
-  doc, 
-  setDoc, 
-  getDoc, 
-  updateDoc, 
-  onSnapshot, 
-  collection 
-} from 'firebase/firestore';
-import { 
-  Users, Sparkles, Eye, EyeOff, Mic, CheckCircle2, AlertTriangle, 
-  Volume2, VolumeX, Crown, Skull, Play, RotateCcw, Plus, UserPlus, 
-  ShieldAlert, HelpCircle, Share2, Award, Zap, MessageSquare, Clock,
-  Bot, Settings, LogOut, Flame, RefreshCw, Fingerprint, ChevronRight
-} from 'lucide-react';
-
-// ==========================================
-// 1. FIREBASE 初始化与配置 (严格遵循云端同步规范)
-// ==========================================
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : {};
-const app = Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : null;
-const auth = app ? getAuth(app) : null;
-const db = app ? getFirestore(app) : null;
-const appId = typeof __app_id !== 'undefined' ? __app_id : 'undercover-party-app';
-
-// ==========================================
-// 2. 精选线下聚会高趣味词库 (分类管理)
-// ==========================================
-const WORD_LIBRARY = {
-  daily: {
-    name: '🍹 日常与美食',
-    pairs: [
-      { c: '牛奶', u: '豆浆', hint: '都是早餐常客，一个动物源，一个植物源' },
-      { c: '火锅', u: '麻辣烫', hint: '都是热气腾腾的快乐，但社交属性差很多' },
-      { c: '保温杯', u: '热水袋', hint: '都能装热水带来温暖，但一个进肚，一个暖手' },
-      { c: '可口可乐', u: '百事可乐', hint: '世纪红蓝大战，肥宅快乐水的两大巨头' },
-      { c: '洗发水', u: '沐浴露', hint: '浴室双雄，泡沫丰富，用错了其实也没大事' },
-      { c: '包子', u: '饺子', hint: '传统面食有馅家族，皮的厚度和形状不同' },
-      { c: '唇膏', u: '口红', hint: '都在嘴上涂抹，一个重保养，一个重气场' },
-      { c: '眼镜', u: '隐形眼镜', hint: '近视眼救星，一个架在鼻梁，一个贴在眼球' }
-    ]
-  },
-  party: {
-    name: '🎭 聚会搞怪与情感',
-    pairs: [
-      { c: '前任', u: '备胎', hint: '感情里最微妙的两种存在，一个在过去，一个在候场' },
-      { c: '暗恋', u: '单恋', hint: '都是一个人的兵荒马乱，区别在于对方知不知道' },
-      { c: '撒娇', u: '卖萌', hint: '让人心软的技能，一个偏语气动作，一个偏表情状态' },
-      { c: '熬夜', u: '失眠', hint: '都是凌晨三点还不睡，一个是主动狂欢，一个是被动折磨' },
-      { c: '直男', u: '暖男', hint: '形容男性的高频词，一个不懂风情，一个中央空调' },
-      { c: '画饼', u: '吹牛', hint: '职场与酒桌必备技能，都没啥实际兑现能力' },
-      { c: '社恐', u: '内向', hint: '聚会角落里的安静美男子，一个害怕社交，一个只是话少' }
-    ]
-  },
-  pop: {
-    name: '🎬 影视与动漫脑洞',
-    pairs: [
-      { c: '蜘蛛侠', u: '蝙蝠侠', hint: '美漫超级英雄，一个靠变异吐丝，一个靠钞能力夜巡' },
-      { c: '柯南', u: '福尔摩斯', hint: '走到哪死到哪的推理大师，一个是小学生，一个是英伦绅士' },
-      { c: '孙悟空', u: '猪八戒', hint: '西天取经核心团队，一个武力担当，一个气氛与退堂鼓担当' },
-      { c: '哈利波特', u: '指环王', hint: '西方魔幻史诗巨作，一个拿魔杖骑扫帚，一个送戒指毁魔戒' },
-      { c: '甄嬛传', u: '延禧攻略', hint: '清宫爽剧天花板，下饭神器，台词都被盘包浆了' },
-      { c: '奥特曼', u: '钢铁侠', hint: '胸口都会发光的英雄，一个打小怪兽，一个打外星人' }
-    ]
-  }
-};
-
-const AVATARS = ['🦊', '🐼', '🦁', '🐸', '🐙', '🦄', '🐯', '🦉', '🐝', '🦖', '👽', '🤠'];
-
-// ==========================================
-// 3. Gemini AI 裁判接口封装 (含指数退避与兜底话术)
-// ==========================================
-async function callGeminiAPI(prompt, systemInstruction, jsonSchema = null) {
-  const apiKey = ""; 
-  const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${apiKey}`;
-
-  const payload = {
-    contents: [{ parts: [{ text: prompt }] }],
-    systemInstruction: { parts: [{ text: systemInstruction }] }
-  };
-
-  if (jsonSchema) {
-    payload.generationConfig = {
-      responseMimeType: "application/json",
-      responseSchema: jsonSchema
-    };
-  }
-
-  const delays = [1000, 2000, 4000];
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    try {
-      const res = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (text) return jsonSchema ? JSON.parse(text) : text.trim();
-    } catch (e) {
-      if (attempt === delays.length) throw e;
-      await new Promise(r => setTimeout(r, delays[attempt]));
-    }
-  }
-}
-
-// ==========================================
-// 4. 主应用组件
-// ==========================================
-export default function App() {
-  // 用户与鉴权状态
-  const [user, setUser] = useState(null);
-  const [nickname, setNickname] = useState(() => `玩家${Math.floor(100 + Math.random() * 900)}`);
-  const [avatar, setAvatar] = useState(() => AVATARS[Math.floor(Math.random() * AVATARS.length)]);
-  
-  // 房间与联机状态
-  const [roomCodeInput, setRoomCodeInput] = useState('');
-  const [activeRoomCode, setActiveRoomCode] = useState('');
-  const [roomData, setRoomData] = useState(null);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-
-  // 本地交互状态 (防窥看牌、模拟玩家视角切换、语音开关等)
-  const [isPeekingCard, setIsPeekingCard] = useState(false);
-  const [activeControlId, setActiveControlId] = useState(null); // 允许房主在测试时切换操控模拟玩家
-  const [ttsEnabled, setTtsEnabled] = useState(true);
-  const [aiThinking, setAiThinking] = useState(false);
-  const [customThemeInput, setCustomThemeInput] = useState('');
-  const [speakerKeyword, setSpeakerKeyword] = useState('');
-  const [timeLeft, setTimeLeft] = useState(30);
-  const [showRulesModal, setShowRulesModal] = useState(false);
-
-  const lastSpokenMessageRef = useRef('');
-
-  // ------------------------------------------
-  // 初始化 Firebase Auth
-  // ------------------------------------------
-  useEffect(() => {
-    if (!auth) return;
-    const initAuth = async () => {
-      try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } else {
-          await signInAnonymously(auth);
-        }
-      } catch (err) {
-        console.error('Auth error:', err);
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      if (u && !activeControlId) setActiveControlId(u.uid);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // ------------------------------------------
-  // 监听当前房间 Firestore 数据实时同步
-  // ------------------------------------------
-  useEffect(() => {
-    if (!user || !db || !activeRoomCode) return;
-
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-    const unsubscribe = onSnapshot(
-      roomRef,
-      (snapshot) => {
-        if (snapshot.exists()) {
-          const data = snapshot.data();
-          setRoomData(data);
-        } else {
-          setErrorMsg('房间已解散或不存在');
-          setActiveRoomCode('');
-          setRoomData(null);
-        }
-      },
-      (err) => {
-        console.error('Room snapshot error:', err);
-        setErrorMsg('同步房间状态失败，请检查网络');
-      }
-    );
-
-    return () => unsubscribe();
-  }, [user, activeRoomCode]);
-
-  // ------------------------------------------
-  // AI 裁判语音自动播报 (Web Speech API)
-  // ------------------------------------------
-  const speakText = (text) => {
-    if (!ttsEnabled || !('speechSynthesis' in window) || !text) return;
-    try {
-      window.speechSynthesis.cancel();
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'zh-CN';
-      utterance.rate = 1.08;
-      utterance.pitch = 1.05;
-      window.speechSynthesis.speak(utterance);
-    } catch (e) {
-      console.warn('TTS play failed:', e);
-    }
-  };
-
-  useEffect(() => {
-    if (roomData?.aiReferee?.message && roomData.aiReferee.message !== lastSpokenMessageRef.current) {
-      lastSpokenMessageRef.current = roomData.aiReferee.message;
-      speakText(roomData.aiReferee.message);
-    }
-  }, [roomData?.aiReferee?.message, ttsEnabled]);
-
-  // ------------------------------------------
-  // 发言阶段倒计时器
-  // ------------------------------------------
-  useEffect(() => {
-    if (roomData?.status !== 'SPEAKING') return;
-    setTimeLeft(roomData?.settings?.speakTime || 30);
-    const timer = setInterval(() => {
-      setTimeLeft((prev) => (prev > 0 ? prev - 1 : 0));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [roomData?.status, roomData?.currentSpeakerId, roomData?.round]);
-
-  // 当前操控的玩家身份（默认是自己，房主可切换操控同屏测试机器人）
-  const effectivePlayerId = activeControlId || user?.uid;
-  const myPlayer = roomData?.players?.find(p => p.id === effectivePlayerId) 
-    || roomData?.players?.find(p => p.id === user?.uid);
-  const isHost = roomData?.hostId === user?.uid;
-
-  // ------------------------------------------
-  // 创建房间与加入房间逻辑
-  // ------------------------------------------
-  const handleCreateRoom = async () => {
-    if (!user || !db) return;
-    if (!nickname.trim()) {
-      setErrorMsg('请先输入您的聚会昵称');
-      return;
-    }
-    setIsLoading(true);
-    setErrorMsg('');
-    try {
-      const code = Math.floor(1000 + Math.random() * 9000).toString();
-      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', code);
-      
-      const initialPlayer = {
-        id: user.uid,
-        name: nickname.trim(),
-        avatar,
-        seat: 1,
-        role: null,
-        word: null,
-        isAlive: true,
-        isSimulated: false,
-        hasReadySeenCard: false,
-        notes: []
-      };
-
-      const initialRoom = {
-        roomCode: code,
-        hostId: user.uid,
-        status: 'LOBBY', // LOBBY | DEALING | SPEAKING | VOTING | RESULT | GAME_OVER
-        round: 1,
-        settings: {
-          undercoverCount: 1,
-          hasBlank: false,
-          category: 'daily',
-          speakTime: 30,
-          aiStyle: '幽默毒舌' // 幽默毒舌 | 悬疑推理 | 欢乐气氛组
-        },
-        wordPair: { civilian: '', undercover: '', hint: '', source: '' },
-        players: [initialPlayer],
-        speakingOrder: [],
-        currentSpeakerId: null,
-        pkPlayers: [], // 平票PK名单
-        votes: {}, // { voterId: targetId }
-        lastEliminated: null,
-        winner: null,
-        aiReferee: {
-          message: `欢迎来到 ${code} 号聚会房间！我是本场 AI 裁判。大家手机扫码或输入房间号入座，凑齐 4 人以上就能发牌啦！`,
-          mood: 'welcome',
-          timestamp: Date.now()
-        },
-        updatedAt: Date.now()
-      };
-
-      await setDoc(roomRef, initialRoom);
-      setActiveControlId(user.uid);
-      setActiveRoomCode(code);
-    } catch (err) {
-      console.error(err);
-      setErrorMsg('创建房间失败，请重试');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleJoinRoom = async (codeToJoin) => {
-    const cleanCode = (codeToJoin || roomCodeInput).trim();
-    if (!user || !db) return;
-    if (!cleanCode || cleanCode.length !== 4) {
-      setErrorMsg('请输入正确的 4 位数字房间号');
-      return;
-    }
-    if (!nickname.trim()) {
-      setErrorMsg('请先输入您的聚会昵称');
-      return;
-    }
-
-    setIsLoading(true);
-    setErrorMsg('');
-    try {
-      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', cleanCode);
-      const snap = await getDoc(roomRef);
-      if (!snap.exists()) {
-        setErrorMsg(`未找到 ${cleanCode} 号房间，请核对房间号`);
-        setIsLoading(false);
-        return;
-      }
-
-      const data = snap.data();
-      const existingPlayer = data.players.find(p => p.id === user.uid);
-
-      if (!existingPlayer) {
-        if (data.status !== 'LOBBY') {
-          setErrorMsg('该房间游戏已经开始，请等下一局加入');
-          setIsLoading(false);
-          return;
-        }
-        const newPlayer = {
-          id: user.uid,
-          name: nickname.trim(),
-          avatar,
-          seat: data.players.length + 1,
-          role: null,
-          word: null,
-          isAlive: true,
-          isSimulated: false,
-          hasReadySeenCard: false,
-          notes: []
-        };
-        const updatedPlayers = [...data.players, newPlayer];
-        await updateDoc(roomRef, {
-          players: updatedPlayers,
-          aiReferee: {
-            message: `欢迎 ${newPlayer.seat} 号玩家【${newPlayer.name}】落座！目前房间已有 ${updatedPlayers.length} 人。`,
-            mood: 'excited',
-            timestamp: Date.now()
-          }
-        });
-      }
-
-      setActiveControlId(user.uid);
-      setActiveRoomCode(cleanCode);
-    } catch (err) {
-      console.error(err);
-      setErrorMsg('加入房间失败，请重试');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // ------------------------------------------
-  // 房主快捷操作：添加同屏测试/聚会没带手机的朋友补位
-  // ------------------------------------------
-  const handleAddLocalPlayer = async () => {
-    if (!isHost || !roomData) return;
-    const demoNames = ['阿强(同屏)', '小美(同屏)', '卡卡(同屏)', '老王(同屏)', '萌萌(同屏)', '大壮(同屏)', '七七(同屏)'];
-    const seatNum = roomData.players.length + 1;
-    if (seatNum > 12) return;
-
-    const usedNames = new Set(roomData.players.map(p => p.name));
-    const availableName = demoNames.find(n => !usedNames.has(n)) || `好友${seatNum}号`;
-
-    const newSimPlayer = {
-      id: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      name: availableName,
-      avatar: AVATARS[seatNum % AVATARS.length],
-      seat: seatNum,
-      role: null,
-      word: null,
-      isAlive: true,
-      isSimulated: true,
-      hasReadySeenCard: false,
-      notes: []
-    };
-
-    const updatedPlayers = [...roomData.players, newSimPlayer];
-    // 自动根据人数调整推荐卧底数
-    const autoUndercover = updatedPlayers.length >= 7 ? 2 : 1;
-
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-    await updateDoc(roomRef, {
-      players: updatedPlayers,
-      'settings.undercoverCount': autoUndercover,
-      aiReferee: {
-        message: `已添加 ${seatNum} 号玩家【${availableName}】！支持在顶部切换视角测试，或与没带手机的朋友传递手机看牌。`,
-        mood: 'happy',
-        timestamp: Date.now()
-      }
-    });
-  };
-
-  const handleRemovePlayer = async (targetId) => {
-    if (!isHost || !roomData || roomData.status !== 'LOBBY') return;
-    const filtered = roomData.players
-      .filter(p => p.id !== targetId)
-      .map((p, idx) => ({ ...p, seat: idx + 1 }));
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-    await updateDoc(roomRef, { players: filtered });
-    if (activeControlId === targetId) setActiveControlId(user.uid);
-  };
-
-  const handleUpdateSetting = async (key, value) => {
-    if (!isHost || !roomData) return;
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-    await updateDoc(roomRef, {
-      [`settings.${key}`]: value
-    });
-  };
-
-  // ------------------------------------------
-  // AI 裁判智能生成全新词组 & 主持词
-  // ------------------------------------------
-  const generateAIWordPair = async (theme) => {
-    const schema = {
-      type: "OBJECT",
-      properties: {
-        civilianWord: { type: "STRING" },
-        undercoverWord: { type: "STRING" },
-        subtleHint: { type: "STRING" },
-        openingJoke: { type: "STRING" }
-      },
-      required: ["civilianWord", "undercoverWord", "subtleHint", "openingJoke"]
-    };
-
-    const sysPrompt = `你是线下聚会游戏《谁是卧底》的金牌AI裁判（风格：${roomData?.settings?.aiStyle || '幽默毒舌'}）。
-请设计一组极具趣味性、既有共同点又有微妙差异的“平民词”和“卧底词”（每个词2~4个字，绝不能生僻）。
-同时提供一个不剧透具体词但能调动气氛的微妙线索（subtleHint），以及一句不超过45字的开场主持词（openingJoke）。`;
-
-    const userPrompt = theme 
-      ? `请围绕主题【${theme}】生成一组《谁是卧底》词条。` 
-      : `请针对年轻朋友线下聚会场景，随机生成一组让人忍俊不禁的高质量《谁是卧底》词条。`;
-
-    return await callGeminiAPI(userPrompt, sysPrompt, schema);
-  };
-
-  // ------------------------------------------
-  // 开始游戏：发牌与身份分配
-  // ------------------------------------------
-  const handleStartGame = async (useAICustomWords = false) => {
-    if (!isHost || !roomData) return;
-    const totalPlayers = roomData.players.length;
-    if (totalPlayers < 4) {
-      setErrorMsg('至少需要 4 名玩家才能开始游戏（可点击“+ 添加同屏玩家”快速凑局）');
-      return;
-    }
-
-    setErrorMsg('');
-    setAiThinking(true);
-
-    try {
-      let chosenPair = null;
-      let openingMsg = '';
-
-      if (useAICustomWords) {
-        try {
-          const aiRes = await generateAIWordPair(customThemeInput.trim());
-          chosenPair = {
-            civilian: aiRes.civilianWord,
-            undercover: aiRes.undercoverWord,
-            hint: aiRes.subtleHint,
-            source: '✨ AI 裁判实时命题'
-          };
-          openingMsg = aiRes.openingJoke;
-        } catch (e) {
-          console.warn('AI word gen fallback:', e);
-        }
-      }
-
-      if (!chosenPair) {
-        const cat = WORD_LIBRARY[roomData.settings.category] || WORD_LIBRARY.daily;
-        const randomItem = cat.pairs[Math.floor(Math.random() * cat.pairs.length)];
-        // 随机交换平民词和卧底词，防止背题库
-        const flip = Math.random() > 0.5;
-        chosenPair = {
-          civilian: flip ? randomItem.c : randomItem.u,
-          undercover: flip ? randomItem.u : randomItem.c,
-          hint: randomItem.hint,
-          source: cat.name
-        };
-        openingMsg = `底牌已秘密派发到各位手机！请长按屏幕偷看自己的词，注意表情管理，别第一秒就笑场暴露咯！`;
-      }
-
-      // 分配角色池
-      const uCount = Math.min(roomData.settings.undercoverCount || 1, Math.floor((totalPlayers - 1) / 2));
-      const bCount = roomData.settings.hasBlank && totalPlayers >= 5 ? 1 : 0;
-      const cCount = totalPlayers - uCount - bCount;
-
-      const rolesPool = [
-        ...Array(cCount).fill('CIVILIAN'),
-        ...Array(uCount).fill('UNDERCOVER'),
-        ...Array(bCount).fill('BLANK')
-      ];
-
-      // Fisher-Yates 洗牌算法打乱身份
-      for (let i = rolesPool.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [rolesPool[i], rolesPool[j]] = [rolesPool[j], rolesPool[i]];
-      }
-
-      const assignedPlayers = roomData.players.map((p, idx) => {
-        const role = rolesPool[idx];
-        let word = chosenPair.civilian;
-        if (role === 'UNDERCOVER') word = chosenPair.undercover;
-        if (role === 'BLANK') word = '【白板（无词，靠演技盲猜）】';
-
-        return {
-          ...p,
-          role,
-          word,
-          isAlive: true,
-          hasReadySeenCard: p.isSimulated ? true : false, // 同屏模拟玩家默认已就绪，也可随时切换偷看
-          notes: []
-        };
-      });
-
-      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-      await updateDoc(roomRef, {
-        status: 'DEALING',
-        round: 1,
-        wordPair: chosenPair,
-        players: assignedPlayers,
-        speakingOrder: [],
-        currentSpeakerId: null,
-        pkPlayers: [],
-        votes: {},
-        lastEliminated: null,
-        winner: null,
-        aiReferee: {
-          message: openingMsg,
-          mood: 'mystery',
-          timestamp: Date.now()
-        }
-      });
-    } catch (err) {
-      console.error(err);
-      setErrorMsg('发牌失败，请重试');
-    } finally {
-      setAiThinking(false);
-    }
-  };
-
-  // ------------------------------------------
-  // 确认看完底牌 & 进入线下轮流发言阶段
-  // ------------------------------------------
-  const handleConfirmSeenCard = async () => {
-    if (!roomData || !myPlayer) return;
-    const updatedPlayers = roomData.players.map(p => 
-      p.id === myPlayer.id ? { ...p, hasReadySeenCard: true } : p
-    );
-
-    const allReady = updatedPlayers.every(p => p.hasReadySeenCard);
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-
-    if (allReady) {
-      await startSpeakingRound(updatedPlayers, 1, []);
-    } else {
-      await updateDoc(roomRef, { players: updatedPlayers });
-    }
-  };
-
-  const startSpeakingRound = async (playersList, roundNum, pkPlayerIds = []) => {
-    const eligibleSpeakers = pkPlayerIds.length > 0
-      ? playersList.filter(p => pkPlayerIds.includes(p.id))
-      : playersList.filter(p => p.isAlive);
-
-    if (eligibleSpeakers.length === 0) return;
-
-    // 随机抽取本轮第一位发言人，随后按座位号顺时针
-    const startIdx = Math.floor(Math.random() * eligibleSpeakers.length);
-    const orderedIds = [
-      ...eligibleSpeakers.slice(startIdx).map(p => p.id),
-      ...eligibleSpeakers.slice(0, startIdx).map(p => p.id)
-    ];
-
-    const firstSpeaker = playersList.find(p => p.id === orderedIds[0]);
-    const isPK = pkPlayerIds.length > 0;
-
-    const refereeMsg = isPK
-      ? `平票加赛 PK！请平票玩家用最后 20 秒为自己辩解！首先请 ${firstSpeaker.seat} 号【${firstSpeaker.name}】线下开口发言！`
-      : `第 ${roundNum} 轮线下发言开始！本轮由 ${firstSpeaker.seat} 号【${firstSpeaker.name}】打头阵，大家竖起耳朵听TA怎么描述！`;
-
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-    await updateDoc(roomRef, {
-      players: playersList,
-      status: 'SPEAKING',
-      round: roundNum,
-      speakingOrder: orderedIds,
-      currentSpeakerId: orderedIds[0],
-      pkPlayers: pkPlayerIds,
-      votes: {},
-      aiReferee: {
-        message: refereeMsg,
-        mood: 'speaking',
-        timestamp: Date.now()
-      }
-    });
-  };
-
-  // ------------------------------------------
-  // 线下发言完毕 -> 轮转下一位或进入手机投票
-  // ------------------------------------------
-  const handleFinishSpeaking = async () => {
-    if (!roomData || roomData.status !== 'SPEAKING') return;
-    const currentId = roomData.currentSpeakerId;
-    const order = roomData.speakingOrder || [];
-    const currentIdx = order.indexOf(currentId);
-
-    // 如果填写了可选的发言关键词备忘，记录到该玩家名下
-    let updatedPlayers = roomData.players;
-    if (speakerKeyword.trim()) {
-      updatedPlayers = roomData.players.map(p => {
-        if (p.id === currentId) {
-          return {
-            ...p,
-            notes: [...(p.notes || []), `R${roomData.round}: ${speakerKeyword.trim()}`]
-          };
-        }
-        return p;
-      });
-      setSpeakerKeyword('');
-    }
-
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-
-    if (currentIdx >= 0 && currentIdx < order.length - 1) {
-      const nextSpeakerId = order[currentIdx + 1];
-      const nextSpeaker = updatedPlayers.find(p => p.id === nextSpeakerId);
-      await updateDoc(roomRef, {
-        players: updatedPlayers,
-        currentSpeakerId: nextSpeakerId,
-        aiReferee: {
-          message: `好的！接下来请 ${nextSpeaker.seat} 号【${nextSpeaker.name}】线下发言，禁止直接报字或照抄上一位哦！`,
-          mood: 'speaking',
-          timestamp: Date.now()
-        }
-      });
-    } else {
-      // 全员发言完毕，进入手机秘密投票阶段
-      await updateDoc(roomRef, {
-        players: updatedPlayers,
-        status: 'VOTING',
-        currentSpeakerId: null,
-        votes: {},
-        aiReferee: {
-          message: `全员发言完毕！眼神都开始不对劲了，现在请拿起手机，点击你最怀疑的头像秘密投票！`,
-          mood: 'voting',
-          timestamp: Date.now()
-        }
-      });
-    }
-  };
-
-  // ------------------------------------------
-  // 手机投票器逻辑 & 计票结算
-  // ------------------------------------------
-  const handleCastVote = async (targetId) => {
-    if (!roomData || roomData.status !== 'VOTING' || !myPlayer || !myPlayer.isAlive) return;
-    if (targetId === myPlayer.id) return; // 不能投自己
-
-    const newVotes = {
-      ...(roomData.votes || {}),
-      [myPlayer.id]: targetId // targetId 可以是 'ABSTAIN' (弃票)
-    };
-
-    const alivePlayers = roomData.players.filter(p => p.isAlive);
-    const allVoted = alivePlayers.every(p => newVotes[p.id] !== undefined);
-
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-
-    if (allVoted) {
-      await tallyVotesAndResolve(newVotes);
-    } else {
-      await updateDoc(roomRef, { votes: newVotes });
-    }
-  };
-
-  // 房主替同屏模拟玩家一键随机/智能投票（方便单人测试）
-  const handleAutoVoteForSimulated = async () => {
-    if (!isHost || !roomData || roomData.status !== 'VOTING') return;
-    const newVotes = { ...(roomData.votes || {}) };
-    const alivePlayers = roomData.players.filter(p => p.isAlive);
-    const candidates = roomData.pkPlayers?.length > 0
-      ? alivePlayers.filter(p => roomData.pkPlayers.includes(p.id))
-      : alivePlayers;
-
-    alivePlayers.forEach(voter => {
-      if (voter.isSimulated && newVotes[voter.id] === undefined) {
-        const validTargets = candidates.filter(c => c.id !== voter.id);
-        if (validTargets.length > 0) {
-          const pick = validTargets[Math.floor(Math.random() * validTargets.length)];
-          newVotes[voter.id] = pick.id;
-        } else {
-          newVotes[voter.id] = 'ABSTAIN';
-        }
-      }
-    });
-
-    const allVoted = alivePlayers.every(p => newVotes[p.id] !== undefined);
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-    if (allVoted) {
-      await tallyVotesAndResolve(newVotes);
-    } else {
-      await updateDoc(roomRef, { votes: newVotes });
-    }
-  };
-
-  const tallyVotesAndResolve = async (finalVotes) => {
-    const counts = {};
-    Object.values(finalVotes).forEach(targetId => {
-      if (targetId && targetId !== 'ABSTAIN') {
-        counts[targetId] = (counts[targetId] || 0) + 1;
-      }
-    });
-
-    let maxVotes = 0;
-    Object.values(counts).forEach(c => {
-      if (c > maxVotes) maxVotes = c;
-    });
-
-    const topIds = Object.keys(counts).filter(id => counts[id] === maxVotes);
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-
-    // 情况1：全员弃票
-    if (maxVotes === 0 || topIds.length === 0) {
-      await updateDoc(roomRef, {
-        votes: finalVotes,
-        status: 'RESULT',
-        lastEliminated: { type: 'NONE', reason: '全员弃票，本轮平安夜无人出局！' },
-        aiReferee: {
-          message: `居然全员弃票？！大家是过于团结还是全员卧底？本轮平安夜无人出局！`,
-          mood: 'shocked',
-          timestamp: Date.now()
-        }
-      });
-      return;
-    }
-
-    // 情况2：出现平票
-    if (topIds.length > 1) {
-      const tiedNames = topIds
-        .map(id => {
-          const p = roomData.players.find(pl => pl.id === id);
-          return `${p?.seat}号【${p?.name}】`;
-        })
-        .join('、');
-
-      // 如果还没进行过本轮PK，则开启平票PK发言
-      if (!roomData.pkPlayers || roomData.pkPlayers.length === 0) {
-        await startSpeakingRound(roomData.players, roomData.round, topIds);
-        await updateDoc(roomRef, {
-          aiReferee: {
-            message: `戏剧性平票！${tiedNames} 各得 ${maxVotes} 票！现在进入 PK 辩解环节，请他们依次作最后陈述！`,
-            mood: 'shocked',
-            timestamp: Date.now()
-          }
-        });
-        return;
-      } else {
-        // 如果PK后依然平票，本轮无人出局，进入下一轮
-        await updateDoc(roomRef, {
-          votes: finalVotes,
-          status: 'RESULT',
-          pkPlayers: [],
-          lastEliminated: { type: 'TIE_SAFE', reason: `PK 依然平票（${tiedNames}），本轮无人出局！` },
-          aiReferee: {
-            message: `不可思议！二轮 PK 依然难分高下！本轮无人出局，悬念留到下一轮！`,
-            mood: 'shocked',
-            timestamp: Date.now()
-          }
-        });
-        return;
-      }
-    }
-
-    // 情况3：单人最高票出局
-    const eliminatedId = topIds[0];
-    const eliminatedPlayer = roomData.players.find(p => p.id === eliminatedId);
-    const updatedPlayers = roomData.players.map(p => 
-      p.id === eliminatedId ? { ...p, isAlive: false } : p
-    );
-
-    // 判定游戏胜负
-    const aliveList = updatedPlayers.filter(p => p.isAlive);
-    const aliveUndercovers = aliveList.filter(p => p.role === 'UNDERCOVER' || p.role === 'BLANK');
-    const aliveCivilians = aliveList.filter(p => p.role === 'CIVILIAN');
-
-    let winner = null;
-    if (aliveUndercovers.length === 0) {
-      winner = 'CIVILIAN';
-    } else if (aliveCivilians.length <= aliveUndercovers.length || aliveList.length <= 2) {
-      winner = 'UNDERCOVER';
-    }
-
-    const roleLabel = eliminatedPlayer.role === 'CIVILIAN' 
-      ? '平民' 
-      : eliminatedPlayer.role === 'UNDERCOVER' ? '卧底' : '白板';
-
-    if (winner) {
-      const winText = winner === 'CIVILIAN'
-        ? `游戏结束！【平民阵营】获胜！${eliminatedPlayer.seat}号【${eliminatedPlayer.name}】正是最后的${roleLabel}！`
-        : `游戏结束！【卧底阵营】逆天改命获胜！${eliminatedPlayer.seat}号【${eliminatedPlayer.name}】含冤出局（身份：${roleLabel}），卧底成功潜伏到了最后！`;
-
-      await updateDoc(roomRef, {
-        players: updatedPlayers,
-        votes: finalVotes,
-        status: 'GAME_OVER',
-        winner,
-        pkPlayers: [],
-        lastEliminated: {
-          type: 'ELIMINATED',
-          player: eliminatedPlayer,
-          votesCount: maxVotes,
-          roleLabel
-        },
-        aiReferee: {
-          message: winText,
-          mood: 'celebrate',
-          timestamp: Date.now()
-        }
-      });
-    } else {
-      const nextMsg = eliminatedPlayer.role === 'CIVILIAN'
-        ? `惨案发生！以 ${maxVotes} 票出局的 ${eliminatedPlayer.seat}号【${eliminatedPlayer.name}】竟然是个无辜的【平民】！卧底还在场上偷笑，游戏继续！`
-        : `干得漂亮！大家揪出了隐藏的【${roleLabel}】—— ${eliminatedPlayer.seat}号【${eliminatedPlayer.name}】！但场上还有潜伏者，战斗继续！`;
-
-      await updateDoc(roomRef, {
-        players: updatedPlayers,
-        votes: finalVotes,
-        status: 'RESULT',
-        pkPlayers: [],
-        lastEliminated: {
-          type: 'ELIMINATED',
-          player: eliminatedPlayer,
-          votesCount: maxVotes,
-          roleLabel
-        },
-        aiReferee: {
-          message: nextMsg,
-          mood: eliminatedPlayer.role === 'CIVILIAN' ? 'shocked' : 'excited',
-          timestamp: Date.now()
-        }
-      });
-    }
-  };
-
-  // ------------------------------------------
-  // 请求 AI 裁判毒舌点评 / 释放不剧透线索
-  // ------------------------------------------
-  const handleAskAIRefereeComment = async () => {
-    if (!roomData || aiThinking) return;
-    setAiThinking(true);
-    try {
-      const aliveNames = roomData.players.filter(p => p.isAlive).map(p => `${p.seat}号${p.name}`).join('、');
-      const notesSummary = roomData.players
-        .filter(p => p.notes?.length > 0)
-        .map(p => `${p.seat}号说过:[${p.notes.join(';')}]`)
-        .join(' | ');
-
-      const sysPrompt = `你是线下聚会《谁是卧底》的AI裁判（风格：${roomData.settings?.aiStyle || '幽默毒舌'}）。
-绝不能直接说出平民词（${roomData.wordPair?.civilian}）或卧底词（${roomData.wordPair?.undercover}）中的任何字！
-请给出一段不超过55字的幽默控场点评或脑洞侧面提示，帮现场带起节奏。`;
-
-      const userPrompt = `当前第${roomData.round}轮，阶段：${roomData.status}。存活玩家：${aliveNames}。
-${notesSummary ? `玩家发言记录：${notesSummary}。` : ''}
-词条暗线提示为：${roomData.wordPair?.hint}。请给出一句精彩的裁判控场话术！`;
-
-      const comment = await callGeminiAPI(userPrompt, sysPrompt);
-      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-      await updateDoc(roomRef, {
-        aiReferee: {
-          message: comment || `悄悄提示一句：${roomData.wordPair?.hint}！看看谁刚才眼神飘忽不定？`,
-          mood: 'mystery',
-          timestamp: Date.now()
-        }
-      });
-    } catch (e) {
-      const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-      await updateDoc(roomRef, {
-        aiReferee: {
-          message: `本裁判友情提示：${roomData.wordPair?.hint}！注意观察谁在疯狂附和别人！`,
-          mood: 'mystery',
-          timestamp: Date.now()
-        }
-      });
-    } finally {
-      setAiThinking(false);
-    }
-  };
-
-  const handleBackToLobby = async () => {
-    if (!isHost || !roomData) return;
-    const resetPlayers = roomData.players.map(p => ({
-      ...p,
-      role: null,
-      word: null,
-      isAlive: true,
-      hasReadySeenCard: false,
-      notes: []
-    }));
-    const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', activeRoomCode);
-    await updateDoc(roomRef, {
-      status: 'LOBBY',
-      round: 1,
-      players: resetPlayers,
-      votes: {},
-      pkPlayers: [],
-      lastEliminated: null,
-      winner: null,
-      aiReferee: {
-        message: `新的一局准备就绪！房主可以随时更换词库或让本 AI 裁判现场出题！`,
-        mood: 'welcome',
-        timestamp: Date.now()
-      }
-    });
-  };
-
-  // ==========================================
-  // 界面渲染：未进入房间时的聚会大厅页
-  // ==========================================
-  if (!activeRoomCode || !roomData) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between p-4 sm:p-6 relative overflow-hidden select-none">
-        {/* 霓虹聚会背景光晕 */}
-        <div className="pointer-events-none fixed inset-0 overflow-hidden">
-          <div className="absolute -top-32 -left-32 w-96 h-96 bg-violet-600/20 rounded-full blur-3xl" />
-          <div className="absolute top-1/3 -right-32 w-96 h-96 bg-amber-500/15 rounded-full blur-3xl" />
-          <div className="absolute -bottom-32 left-1/4 w-96 h-96 bg-rose-600/15 rounded-full blur-3xl" />
-        </div>
-
-        {/* 顶部栏 */}
-        <header className="relative z-10 flex items-center justify-between max-w-lg mx-auto w-full pt-2">
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 via-rose-500 to-violet-600 flex items-center justify-center shadow-lg shadow-rose-500/20">
-              <Fingerprint className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <h1 className="text-xl font-black tracking-wider bg-gradient-to-r from-amber-200 via-white to-violet-200 bg-clip-text text-transparent">
-                谁是卧底 · 聚会联机版
-              </h1>
-              <p className="text-xs text-slate-400">手机防窥发牌 & 投票器 + AI 语音裁判</p>
-            </div>
-          </div>
-          <button
-            onClick={() => setShowRulesModal(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900/90 border border-slate-800 text-xs text-slate-300 hover:border-amber-500/50 transition"
-          >
-            <HelpCircle className="w-4 h-4 text-amber-400" />
-            规则说明
-          </button>
-        </header>
-
-        {/* 主体卡片 */}
-        <main className="relative z-10 max-w-lg mx-auto w-full my-auto py-6 space-y-5">
-          {/* AI 裁判迎宾横幅 */}
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-violet-950/80 via-slate-900/90 to-slate-900/80 border border-violet-500/30 shadow-xl flex items-start gap-3.5">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center shrink-0 shadow-md shadow-violet-500/30">
-              <Bot className="w-7 h-7 text-white animate-pulse" />
-            </div>
-            <div className="text-xs sm:text-sm space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-violet-300">AI 金牌裁判</span>
-                <span className="px-2 py-0.5 text-[10px] rounded-full bg-violet-500/20 text-violet-200 border border-violet-400/30">
-                  解放房主 · 全员参战
-                </span>
-              </div>
-              <p className="text-slate-300 leading-relaxed">
-                “聚会再也不用牺牲一个人当法官啦！大家面对面坐好，用各自手机输入同一个 4 位房间号，我来负责发牌、计时、毒舌控场和计票！”
-              </p>
-            </div>
-          </div>
-
-          {/* 玩家个人形象设置 */}
-          <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-5 shadow-2xl space-y-4">
-            <h2 className="text-sm font-bold text-slate-300 flex items-center gap-2">
-              <Users className="w-4 h-4 text-amber-400" />
-              第一步：定制你的聚会代号与头像
-            </h2>
-
-            <div className="flex items-center gap-3">
-              <div className="w-14 h-14 rounded-2xl bg-slate-800 border-2 border-amber-400/60 flex items-center justify-center text-3xl shrink-0 shadow-inner">
-                {avatar}
-              </div>
-              <div className="flex-1">
-                <label className="text-xs text-slate-400 block mb-1">你的聚会昵称</label>
-                <input
-                  type="text"
-                  maxLength={10}
-                  value={nickname}
-                  onChange={(e) => setNickname(e.target.value)}
-                  placeholder="输入昵称，如：微醺小王"
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white font-medium focus:outline-none focus:border-amber-400 transition"
-                />
-              </div>
-            </div>
-
-            {/* 头像快速选择 */}
-            <div className="grid grid-cols-6 gap-2 pt-1">
-              {AVATARS.map((emo) => (
-                <button
-                  key={emo}
-                  onClick={() => setAvatar(emo)}
-                  className={`py-2 rounded-xl text-xl flex items-center justify-center transition ${
-                    avatar === emo
-                      ? 'bg-amber-500/20 border-2 border-amber-400 scale-105'
-                      : 'bg-slate-950/60 border border-slate-800 hover:bg-slate-800'
-                  }`}
-                >
-                  {emo}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 创建或加入房间 */}
-          <div className="bg-slate-900/90 backdrop-blur-xl border border-slate-800/80 rounded-3xl p-5 shadow-2xl space-y-4">
-            <h2 className="text-sm font-bold text-slate-300 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-violet-400" />
-              第二步：创建新局 或 加入好友房间
-            </h2>
-
-            {errorMsg && (
-              <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-
-            <button
-              onClick={handleCreateRoom}
-              disabled={isLoading || !user}
-              className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 hover:from-amber-400 hover:to-rose-400 text-slate-950 font-black text-base shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 transition active:scale-[0.99] disabled:opacity-50"
-            >
-              <Crown className="w-5 h-5" />
-              {isLoading ? '正在布置聚会桌...' : '我是组织者 · 创建聚会房间'}
-            </button>
-
-            <div className="relative flex py-1 items-center">
-              <div className="flex-grow border-t border-slate-800"></div>
-              <span className="flex-shrink mx-3 text-xs text-slate-500">或者输入桌上的 4 位房间号</span>
-              <div className="flex-grow border-t border-slate-800"></div>
-            </div>
-
-            <div className="flex gap-2.5">
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={4}
-                value={roomCodeInput}
-                onChange={(e) => setRoomCodeInput(e.target.value.replace(/\D/g, ''))}
-                placeholder="输入4位房间号"
-                className="flex-1 px-4 py-3 rounded-2xl bg-slate-950 border border-slate-700 text-center text-lg font-mono tracking-widest text-amber-300 placeholder:text-slate-600 placeholder:text-sm placeholder:tracking-normal focus:outline-none focus:border-violet-400"
-              />
-              <button
-                onClick={() => handleJoinRoom()}
-                disabled={isLoading || !user || roomCodeInput.length !== 4}
-                className="px-6 py-3 rounded-2xl bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold text-sm transition flex items-center gap-1.5 shrink-0"
-              >
-                加入房间
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </main>
-
-        {/* 底部说明 */}
-        <footer className="relative z-10 text-center text-xs text-slate-500 pb-2">
-          支持多手机实时联机 · 支持单手机同屏传阅与快速测试
-        </footer>
-
-        {/* 规则说明弹窗 */}
-        {showRulesModal && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-md w-full p-6 space-y-4 text-sm text-slate-300 shadow-2xl">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <Award className="w-5 h-5 text-amber-400" />
-                  线下聚会《谁是卧底》玩法指南
-                </h3>
-                <button onClick={() => setShowRulesModal(false)} className="text-slate-400 hover:text-white">✕</button>
-              </div>
-              <div className="space-y-3 leading-relaxed text-xs sm:text-sm">
-                <p><strong className="text-amber-300">1. 秘密看牌：</strong>全员入座后，手机会收到一张防窥底牌。大多数人拿到相同的<span className="text-emerald-400">【平民词】</span>，1~2人拿到相似的<span className="text-rose-400">【卧底词】</span>（拿到牌时你不知道自己是平民还是卧底！）。</p>
-                <p><strong className="text-amber-300">2. 面对面轮流发言：</strong>按照 AI 裁判点名的座位顺序，大家<strong>直接在线下开口</strong>用一句话描述自己的词。既要让队友听懂，又不能太直白让卧底猜出，更<strong>禁止直接报出词里的字</strong>！</p>
-                <p><strong className="text-amber-300">3. 手机秘密投票：</strong>每轮发言结束，所有人用自己手机点击最可疑的玩家头像投票。得票最高者出局并由 AI 裁判揭晓身份。</p>
-                <p><strong className="text-amber-300">4. 胜负条件：</strong>把所有卧底投出局则<strong>平民获胜</strong>；若卧底存活到场上只剩 2~3 人（或平民人数 ≤ 卧底人数），则<strong>卧底逆袭获胜</strong>！</p>
-              </div>
-              <button
-                onClick={() => setShowRulesModal(false)}
-                className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold"
-              >
-                明白啦，开始组局！
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    );
-  }
-
-  // ==========================================
-  // 界面渲染：房间内主界面 (含 AI 裁判舞台 + 5大阶段流转)
-  // ==========================================
-  const aliveCount = roomData.players.filter(p => p.isAlive).length;
-  const aliveUndercoverCount = roomData.players.filter(p => p.isAlive && (p.role === 'UNDERCOVER' || p.role === 'BLANK')).length;
-  const currentSpeaker = roomData.players.find(p => p.id === roomData.currentSpeakerId);
-  const hasSimulatedPlayers = roomData.players.some(p => p.isSimulated);
-
-  return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between pb-6 select-none">
-      {/* 顶部房间导航与状态条 */}
-      <header className="sticky top-0 z-30 bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80 px-4 py-2.5">
-        <div className="max-w-2xl mx-auto flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5">
-            <div className="px-3 py-1 rounded-xl bg-amber-500/15 border border-amber-400/40 flex items-center gap-1.5">
-              <span className="text-[11px] text-amber-300/80">房号</span>
-              <span className="font-mono font-black text-base text-amber-300 tracking-wider">
-                {roomData.roomCode}
-              </span>
-            </div>
-            {roomData.status !== 'LOBBY' && (
-              <div className="hidden sm:flex items-center gap-2 text-xs px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800">
-                <span className="text-slate-400">第 <strong className="text-white">{roomData.round}</strong> 轮</span>
-                <span className="text-slate-700">|</span>
-                <span className="text-emerald-400">存活 {aliveCount} 人</span>
-                <span className="text-slate-700">|</span>
-                <span className="text-rose-400">潜伏者 {aliveUndercoverCount} 人</span>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-2">
-            {/* 语音播报开关 */}
-            <button
-              onClick={() => setTtsEnabled(!ttsEnabled)}
-              className={`px-2.5 py-1.5 rounded-xl border text-xs flex items-center gap-1 transition ${
-                ttsEnabled
-                  ? 'bg-violet-500/20 border-violet-400/40 text-violet-200'
-                  : 'bg-slate-900 border-slate-800 text-slate-500'
-              }`}
-              title="切换 AI 裁判语音外放"
-            >
-              {ttsEnabled ? <Volume2 className="w-4 h-4 text-violet-400" /> : <VolumeX className="w-4 h-4" />}
-              <span className="hidden sm:inline">{ttsEnabled ? 'AI语音开启' : '静音'}</span>
-            </button>
-
-            <button
-              onClick={() => setShowRulesModal(true)}
-              className="p-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white"
-            >
-              <HelpCircle className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => {
-                setActiveRoomCode('');
-                setRoomData(null);
-              }}
-              className="p-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-rose-400"
-              title="离开房间"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* 同屏玩家视角切换栏（当房间内添加了同屏模拟玩家时显示，极度方便单机测试与传阅手机） */}
-        {hasSimulatedPlayers && (
-          <div className="max-w-2xl mx-auto mt-2 pt-2 border-t border-slate-800/80 flex items-center gap-2 overflow-x-auto no-scrollbar">
-            <span className="text-[11px] text-amber-400 shrink-0 font-semibold flex items-center gap-1">
-              <Zap className="w-3.5 h-3.5" />
-              当前手机操控视角:
-            </span>
-            {roomData.players.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => {
-                  setActiveControlId(p.id);
-                  setIsPeekingCard(false);
-                }}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium shrink-0 flex items-center gap-1 transition ${
-                  myPlayer?.id === p.id
-                    ? 'bg-amber-400 text-slate-950 font-bold shadow'
-                    : 'bg-slate-900 text-slate-400 border border-slate-800 hover:text-white'
-                }`}
-              >
-                <span>{p.avatar}</span>
-                <span>{p.seat}号 {p.name}</span>
-                {!p.isAlive && <span className="text-[10px] text-rose-500">(出局)</span>}
-              </button>
-            ))}
-          </div>
-        )}
-      </header>
-
-      {/* 主内容容器 */}
-      <main className="max-w-2xl mx-auto w-full px-4 pt-4 space-y-4 flex-1">
-        {/* ==========================================
-            模块 A: AI 裁判中央控场舞台 (常驻)
-           ========================================== */}
-        <section className="relative rounded-3xl bg-gradient-to-br from-violet-950/90 via-slate-900 to-slate-900 border border-violet-500/40 p-4 shadow-xl overflow-hidden">
-          <div className="flex items-start gap-3.5">
-            <div className="relative shrink-0">
-              <div className="w-13 h-13 sm:w-14 sm:h-14 rounded-2xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-amber-500 p-0.5 shadow-lg shadow-violet-500/30">
-                <div className="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center">
-                  <Bot className={`w-7 h-7 text-violet-300 ${aiThinking ? 'animate-spin' : 'animate-bounce'}`} />
-                </div>
-              </div>
-              <span className="absolute -bottom-1 -right-1 px-1.5 py-0.5 text-[9px] font-bold bg-amber-400 text-slate-950 rounded-md">
-                AI 裁判
-              </span>
-            </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between gap-2 mb-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-violet-300">
-                    本场 AI 控场主持 ({roomData.settings?.aiStyle || '幽默毒舌'})
-                  </span>
-                  {roomData.wordPair?.source && roomData.status !== 'LOBBY' && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                      {roomData.wordPair.source}
-                    </span>
-                  )}
-                </div>
-
-                {roomData.status !== 'LOBBY' && (
-                  <button
-                    onClick={handleAskAIRefereeComment}
-                    disabled={aiThinking}
-                    className="text-[11px] px-2.5 py-1 rounded-full bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-violet-200 flex items-center gap-1 shrink-0 transition"
-                  >
-                    <Sparkles className="w-3 h-3 text-amber-300" />
-                    {aiThinking ? 'AI思考中...' : '求线索/毒舌点评'}
-                  </button>
-                )}
-              </div>
-
-              <p className="text-sm sm:text-base text-white font-medium leading-snug">
-                “{roomData.aiReferee?.message || '欢迎来到谁是卧底聚会现场！'}”
-              </p>
-            </div>
-          </div>
-        </section>
-
-        {/* 错误提示横幅 */}
-        {errorMsg && (
-          <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-200 text-xs flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-              <span>{errorMsg}</span>
-            </div>
-            <button onClick={() => setErrorMsg('')} className="text-rose-300 hover:text-white">✕</button>
-          </div>
-        )}
-
-        {/* ==========================================
-            模块 B: 房间外围座位环形网格 (实时反映状态)
-           ========================================== */}
-        <section className="bg-slate-900/80 border border-slate-800 rounded-3xl p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-              <Users className="w-4 h-4 text-amber-400" />
-              聚会圆桌座位 ({roomData.players.length}人)
-            </h3>
-
-            {roomData.status === 'LOBBY' && isHost && (
-              <button
-                onClick={handleAddLocalPlayer}
-                className="px-3 py-1 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1 transition"
-              >
-                <UserPlus className="w-3.5 h-3.5" />
-                + 添加同屏玩家/测试补位
-              </button>
-            )}
-          </div>
-
-          <div className="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
-            {roomData.players.map((p) => {
-              const isMe = p.id === myPlayer?.id;
-              const isCurrentSpeaker = roomData.status === 'SPEAKING' && roomData.currentSpeakerId === p.id;
-              const hasVoted = roomData.status === 'VOTING' && roomData.votes?.[p.id] !== undefined;
-              const isPKCandidate = roomData.pkPlayers?.includes(p.id);
-              const myVoteTarget = roomData.votes?.[myPlayer?.id];
-
-              // 计算在投票阶段是否可点击该玩家进行投票
-              const canVoteThisPlayer =
-                roomData.status === 'VOTING' &&
-                myPlayer?.isAlive &&
-                p.isAlive &&
-                p.id !== myPlayer.id &&
-                (roomData.pkPlayers?.length === 0 || isPKCandidate);
-
-              return (
-                <div
-                  key={p.id}
-                  onClick={() => {
-                    if (canVoteThisPlayer) handleCastVote(p.id);
-                  }}
-                  className={`relative rounded-2xl p-3 border transition flex flex-col items-center text-center ${
-                    !p.isAlive
-                      ? 'bg-slate-950/60 border-slate-800/60 opacity-50 grayscale'
-                      : isCurrentSpeaker
-                      ? 'bg-amber-500/15 border-2 border-amber-400 shadow-lg shadow-amber-500/20 scale-[1.02]'
-                      : myVoteTarget === p.id && roomData.status === 'VOTING'
-                      ? 'bg-rose-500/20 border-2 border-rose-500 shadow-lg shadow-rose-500/20'
-                      : canVoteThisPlayer
-                      ? 'bg-slate-950/90 border-slate-700 hover:border-rose-400 cursor-pointer active:scale-95'
-                      : 'bg-slate-950/80 border-slate-800'
-                  }`}
-                >
-                  {/* 座位号角标 */}
-                  <span className={`absolute top-2 left-2 px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold ${
-                    isCurrentSpeaker ? 'bg-amber-400 text-slate-950' : 'bg-slate-800 text-slate-300'
-                  }`}>
-                    {p.seat}号
-                  </span>
-
-                  {/* 房主删除按钮 (仅大厅阶段) */}
-                  {roomData.status === 'LOBBY' && isHost && p.id !== user.uid && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleRemovePlayer(p.id);
-                      }}
-                      className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-slate-800 text-slate-400 hover:text-rose-400 text-xs flex items-center justify-center"
-                      title="移出座位"
-                    >
-                      ✕
-                    </button>
-                  )}
-
-                  {/* 状态小徽章 */}
-                  {roomData.status === 'DEALING' && (
-                    <span className={`absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded ${
-                      p.hasReadySeenCard ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-300'
-                    }`}>
-                      {p.hasReadySeenCard ? '已看牌' : '看牌中'}
-                    </span>
-                  )}
-
-                  {roomData.status === 'VOTING' && p.isAlive && (
-                    <span className={`absolute top-2 right-2 text-[10px] px-1.5 py-0.5 rounded ${
-                      hasVoted ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'
-                    }`}>
-                      {hasVoted ? '已投' : '思考中'}
-                    </span>
-                  )}
-
-                  {/* 头像 */}
-                  <div className="text-3xl my-1 relative">
-                    {p.avatar}
-                    {isCurrentSpeaker && (
-                      <span className="absolute -bottom-1 -right-2 w-5 h-5 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center shadow">
-                        <Mic className="w-3 h-3 animate-pulse" />
-                      </span>
-                    )}
-                    {!p.isAlive && (
-                      <span className="absolute inset-0 flex items-center justify-center">
-                        <Skull className="w-7 h-7 text-rose-500 drop-shadow" />
-                      </span>
-                    )}
-                  </div>
-
-                  {/* 昵称与自我标识 */}
-                  <div className="text-xs font-bold text-slate-200 truncate w-full mt-0.5">
-                    {p.name}
-                  </div>
-                  <div className="flex items-center justify-center gap-1 mt-0.5">
-                    {isMe && (
-                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-400/20 text-amber-300 font-semibold">
-                        当前视角
-                      </span>
-                    )}
-                    {isPKCandidate && roomData.status !== 'LOBBY' && (
-                      <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/30 text-rose-300 font-bold">
-                        PK台
-                      </span>
-                    )}
-                  </div>
-
-                  {/* 历史发言备忘标签（如果有） */}
-                  {p.notes?.length > 0 && (
-                    <div className="mt-1.5 w-full text-[10px] text-slate-400 bg-slate-900 px-1.5 py-1 rounded truncate">
-                      “{p.notes[p.notes.length - 1]}”
-                    </div>
-                  )}
-
-                  {/* 投票阶段点击提示 */}
-                  {canVoteThisPlayer && (
-                    <div className="mt-2 w-full py-1 rounded-lg bg-rose-500/20 border border-rose-500/40 text-rose-300 text-[11px] font-bold">
-                      {myVoteTarget === p.id ? '✓ 已锁定投TA' : '投TA出局'}
-                    </div>
-                  )}
-
-                  {/* 游戏结束或出局后公开身份 */}
-                  {(!p.isAlive || roomData.status === 'GAME_OVER') && p.role && (
-                    <div className={`mt-1.5 px-2 py-0.5 rounded text-[10px] font-bold ${
-                      p.role === 'CIVILIAN'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : p.role === 'UNDERCOVER'
-                        ? 'bg-rose-500/30 text-rose-300'
-                        : 'bg-violet-500/30 text-violet-200'
-                    }`}>
-                      {p.role === 'CIVILIAN' ? '平民' : p.role === 'UNDERCOVER' ? '卧底' : '白板'}
-                      {roomData.status === 'GAME_OVER' && p.role !== 'BLANK' && ` · ${p.word}`}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* ==========================================
-            模块 C: 阶段专属核心控制台
-           ========================================== */}
-
-        {/* 1. LOBBY 大厅准备与房主配置阶段 */}
-        {roomData.status === 'LOBBY' && (
-          <section className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 space-y-5 shadow-xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <div>
-                <h2 className="text-base font-bold text-white flex items-center gap-2">
-                  <Settings className="w-4 h-4 text-amber-400" />
-                  聚会本局规则与词库配置
-                </h2>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  请把房间号 <strong className="text-amber-300 font-mono">{roomData.roomCode}</strong> 告诉身边的朋友，或者直接点击上方“+ 添加同屏玩家”立刻开玩
-                </p>
-              </div>
-            </div>
-
-            {/* 配置项列表 */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              {/* 词库分类选择 */}
-              <div className="space-y-1.5">
-                <label className="text-slate-400 font-semibold">精选词库主题</label>
-                <div className="grid grid-cols-1 gap-2">
-                  {Object.entries(WORD_LIBRARY).map(([key, cat]) => (
-                    <button
-                      key={key}
-                      disabled={!isHost}
-                      onClick={() => handleUpdateSetting('category', key)}
-                      className={`px-3 py-2.5 rounded-xl border text-left font-medium flex items-center justify-between transition ${
-                        roomData.settings?.category === key
-                          ? 'bg-amber-500/20 border-amber-400 text-amber-200'
-                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:bg-slate-800'
-                      }`}
-                    >
-                      <span>{cat.name}</span>
-                      {roomData.settings?.category === key && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* 卧底数量、白板与AI裁判风格 */}
-              <div className="space-y-3">
-                <div>
-                  <label className="text-slate-400 font-semibold block mb-1.5">卧底人数配置</label>
-                  <div className="flex gap-2">
-                    {[1, 2, 3].map((num) => (
-                      <button
-                        key={num}
-                        disabled={!isHost}
-                        onClick={() => handleUpdateSetting('undercoverCount', num)}
-                        className={`flex-1 py-2 rounded-xl border font-bold ${
-                          roomData.settings?.undercoverCount === num
-                            ? 'bg-rose-500/20 border-rose-400 text-rose-300'
-                            : 'bg-slate-950 border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {num} 名卧底
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-slate-400 font-semibold block mb-1.5">刺激玩法：混入“白板”角色 (5人以上生效)</label>
-                  <button
-                    disabled={!isHost}
-                    onClick={() => handleUpdateSetting('hasBlank', !roomData.settings?.hasBlank)}
-                    className={`w-full py-2 px-3 rounded-xl border flex items-center justify-between ${
-                      roomData.settings?.hasBlank
-                        ? 'bg-violet-500/20 border-violet-400 text-violet-200'
-                        : 'bg-slate-950 border-slate-800 text-slate-400'
-                    }`}
-                  >
-                    <span>白板玩家拿到空白牌，全凭听别人发言盲猜词义</span>
-                    <span className="font-bold">{roomData.settings?.hasBlank ? '已开启' : '关闭'}</span>
-                  </button>
-                </div>
-
-                <div>
-                  <label className="text-slate-400 font-semibold block mb-1.5">AI 裁判主持性格</label>
-                  <div className="flex gap-2">
-                    {['幽默毒舌', '悬疑推理', '欢乐气氛组'].map((st) => (
-                      <button
-                        key={st}
-                        disabled={!isHost}
-                        onClick={() => handleUpdateSetting('aiStyle', st)}
-                        className={`flex-1 py-2 rounded-xl border font-medium ${
-                          roomData.settings?.aiStyle === st
-                            ? 'bg-violet-500/20 border-violet-400 text-violet-200'
-                            : 'bg-slate-950 border-slate-800 text-slate-400'
-                        }`}
-                      >
-                        {st}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* AI 实时命题输入框 */}
-            {isHost && (
-              <div className="p-3.5 rounded-2xl bg-slate-950 border border-violet-500/30 space-y-2">
-                <label className="text-xs font-bold text-violet-300 flex items-center gap-1.5">
-                  <Sparkles className="w-4 h-4 text-amber-400" />
-                  不想玩固定词库？让 AI 裁判根据你们的圈子现场出题：
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={customThemeInput}
-                    onChange={(e) => setCustomThemeInput(e.target.value)}
-                    placeholder="可选输入出题方向，如：互联网大厂、周杰伦、广东美食..."
-                    className="flex-1 px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs text-white focus:outline-none focus:border-violet-400"
-                  />
-                  <button
-                    onClick={() => handleStartGame(true)}
-                    disabled={aiThinking || roomData.players.length < 4}
-                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-40 text-white text-xs font-bold shrink-0 flex items-center gap-1.5 shadow-lg shadow-violet-600/20"
-                  >
-                    <Sparkles className="w-3.5 h-3.5" />
-                    {aiThinking ? 'AI出题发牌中...' : 'AI 现场命题开局'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* 开局主按钮 */}
-            {isHost ? (
-              <button
-                onClick={() => handleStartGame(false)}
-                disabled={aiThinking || roomData.players.length < 4}
-                className="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 hover:from-amber-300 hover:to-rose-400 disabled:opacity-40 text-slate-950 font-black text-base shadow-xl shadow-amber-500/20 flex items-center justify-center gap-2 transition"
-              >
-                <Play className="w-5 h-5 fill-current" />
-                {roomData.players.length < 4
-                  ? `还差 ${4 - roomData.players.length} 人开局 (可点上方“+ 添加同屏玩家”)`
-                  : `立即发牌开局 (${roomData.players.length}人局)`}
-              </button>
-            ) : (
-              <div className="text-center py-3 rounded-2xl bg-slate-950 border border-slate-800 text-sm text-amber-300 animate-pulse">
-                等待房主配置词库并点击开始发牌...
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* 2. DEALING 防窥发牌与看牌阶段 */}
-        {roomData.status === 'DEALING' && myPlayer && (
-          <section className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 text-center space-y-5 shadow-2xl">
-            <div className="space-y-1">
-              <span className="px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 text-xs font-bold">
-                秘密发牌阶段 · 注意四周防窥屏
-              </span>
-              <h2 className="text-lg font-black text-white pt-1">
-                当前拿牌人：{myPlayer.seat}号 【{myPlayer.name}】
-              </h2>
-              <p className="text-xs text-slate-400">
-                为防止卧底过早紧张，底牌只显示你的词语，不标注你是平民还是卧底
-              </p>
-            </div>
-
-            {/* 防窥翻转底牌 */}
-            <div
-              onMouseDown={() => setIsPeekingCard(true)}
-              onMouseUp={() => setIsPeekingCard(false)}
-              onMouseLeave={() => setIsPeekingCard(false)}
-              onTouchStart={() => setIsPeekingCard(true)}
-              onTouchEnd={() => setIsPeekingCard(false)}
-              onClick={() => setIsPeekingCard(!isPeekingCard)}
-              className={`max-w-xs mx-auto h-48 rounded-3xl border-2 transition-all duration-200 cursor-pointer flex flex-col items-center justify-center p-6 select-none shadow-2xl ${
-                isPeekingCard
-                  ? 'bg-gradient-to-br from-amber-500/20 via-slate-900 to-rose-500/20 border-amber-400 scale-[1.02]'
-                  : 'bg-gradient-to-br from-slate-800 to-slate-950 border-slate-700 hover:border-amber-400/50'
-              }`}
-            >
-              {isPeekingCard ? (
-                <div className="space-y-2 animate-fadeIn">
-                  <Eye className="w-7 h-7 text-amber-400 mx-auto" />
-                  <div className="text-xs text-slate-400">你的本局秘密底牌是：</div>
-                  <div className="text-3xl font-black tracking-widest text-amber-300 py-1">
-                    {myPlayer.word}
-                  </div>
-                  <div className="text-[11px] text-slate-400">松开或再次点击立即隐藏</div>
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  <EyeOff className="w-9 h-9 text-slate-400 mx-auto" />
-                  <div className="text-base font-bold text-slate-200">按住或点击偷看底牌</div>
-                  <div className="text-xs text-slate-500">请捂好手机屏幕，谨防旁边偷瞄</div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-3 justify-center max-w-md mx-auto">
-              <button
-                onClick={handleConfirmSeenCard}
-                disabled={myPlayer.hasReadySeenCard}
-                className="flex-1 py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 disabled:from-slate-800 disabled:to-slate-800 disabled:text-slate-500 text-slate-950 font-black text-sm shadow-lg transition"
-              >
-                {myPlayer.hasReadySeenCard ? '✓ 已记住词语，等待其他人...' : '我已记住词语，准备发言！'}
-              </button>
-
-              {isHost && (
-                <button
-                  onClick={() => startSpeakingRound(roomData.players, 1, [])}
-                  className="py-3.5 px-5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-bold border border-amber-500/30"
-                >
-                  房主直接开启第1轮发言 →
-                </button>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* 3. SPEAKING 线下轮流发言与 AI 计时控场阶段 */}
-        {roomData.status === 'SPEAKING' && (
-          <section className="bg-slate-900/90 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-1 rounded-lg bg-amber-500/20 text-amber-300 text-xs font-bold flex items-center gap-1">
-                  <Mic className="w-3.5 h-3.5 animate-pulse" />
-                  {roomData.pkPlayers?.length > 0 ? '平票 PK 加赛发言' : `第 ${roomData.round} 轮 · 线下口头描述`}
-                </span>
-              </div>
-
-              {/* 倒计时器 */}
-              <div className={`px-3 py-1 rounded-full font-mono text-sm font-black flex items-center gap-1.5 ${
-                timeLeft <= 8 ? 'bg-rose-500/20 text-rose-400 animate-pulse' : 'bg-slate-950 text-amber-300'
-              }`}>
-                <Clock className="w-4 h-4" />
-                {timeLeft}s
-              </div>
-            </div>
-
-            {/* 当前发言人聚光灯卡片 */}
-            {currentSpeaker && (
-              <div className="p-5 rounded-2xl bg-gradient-to-r from-amber-500/10 via-slate-950 to-amber-500/10 border border-amber-500/40 text-center space-y-2">
-                <div className="text-4xl">{currentSpeaker.avatar}</div>
-                <div className="text-lg font-black text-white">
-                  请 <span className="text-amber-300">{currentSpeaker.seat}号【{currentSpeaker.name}】</span> 线下开口描述
-                </div>
-                <p className="text-xs text-slate-400">
-                  禁忌：不能直接说出手中词语包含的单字，不能直接照抄上一位玩家的原话
-                </p>
-              </div>
-            )}
-
-            {/* 可选关键词备忘 & 发言完毕按钮 */}
-            {(myPlayer?.id === roomData.currentSpeakerId || isHost) ? (
-              <div className="space-y-3 pt-1">
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    maxLength={25}
-                    value={speakerKeyword}
-                    onChange={(e) => setSpeakerKeyword(e.target.value)}
-                    placeholder="可选：记录TA刚说的关键词（方便大家投票复盘 & 供AI裁判点评）"
-                    className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white focus:outline-none focus:border-amber-400"
-                  />
-                </div>
-                <button
-                  onClick={handleFinishSpeaking}
-                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-400 to-orange-500 hover:from-amber-300 hover:to-orange-400 text-slate-950 font-black text-sm shadow-lg flex items-center justify-center gap-2 transition"
-                >
-                  <CheckCircle2 className="w-5 h-5" />
-                  {currentSpeaker?.seat}号【{currentSpeaker?.name}】线下发言完毕，下一位！
-                </button>
-              </div>
-            ) : (
-              <div className="text-center py-3 rounded-2xl bg-slate-950 border border-slate-800 text-xs text-slate-400">
-                请认真倾听 <strong className="text-amber-300">{currentSpeaker?.seat}号 {currentSpeaker?.name}</strong> 的线下发言...
-              </div>
-            )}
-          </section>
-        )}
-
-        {/* 4. VOTING 手机秘密投票器阶段 */}
-        {roomData.status === 'VOTING' && (
-          <section className="bg-slate-900/90 border border-rose-500/40 rounded-3xl p-5 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between">
-              <div className="space-y-0.5">
-                <h3 className="text-base font-black text-rose-300 flex items-center gap-2">
-                  <ShieldAlert className="w-5 h-5 text-rose-400" />
-                  全民手机秘密投票阶段
-                </h3>
-                <p className="text-xs text-slate-400">
-                  请直接点击上方【聚会圆桌座位】中你最怀疑的玩家头像进行投票！
-                </p>
-              </div>
-
-              <span className="px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 text-xs font-bold">
-                已投 {Object.keys(roomData.votes || {}).length} / {aliveCount}
-              </span>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
-              {myPlayer?.isAlive ? (
-                <button
-                  onClick={() => handleCastVote('ABSTAIN')}
-                  className={`px-4 py-2.5 rounded-xl border text-xs font-bold transition ${
-                    roomData.votes?.[myPlayer.id] === 'ABSTAIN'
-                      ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                      : 'bg-slate-950 border-slate-700 text-slate-300 hover:border-slate-500'
-                  }`}
-                >
-                  {roomData.votes?.[myPlayer.id] === 'ABSTAIN' ? '✓ 已选择弃权不投' : '实在听不出 · 本轮弃票'}
-                </button>
-              ) : (
-                <span className="text-xs text-slate-500">你已出局，正在上帝视角围观大家投票...</span>
-              )}
-
-              <div className="flex items-center gap-2">
-                {isHost && hasSimulatedPlayers && (
-                  <button
-                    onClick={handleAutoVoteForSimulated}
-                    className="px-3.5 py-2.5 rounded-xl bg-violet-600/30 hover:bg-violet-600/50 border border-violet-400/40 text-violet-200 text-xs font-bold"
-                  >
-                    🤖 替同屏测试玩家自动投票
-                  </button>
-                )}
-
-                {isHost && Object.keys(roomData.votes || {}).length > 0 && (
-                  <button
-                    onClick={() => tallyVotesAndResolve(roomData.votes || {})}
-                    className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold"
-                  >
-                    立即截止并开票 →
-                  </button>
-                )}
-              </div>
-            </div>
-          </section>
-        )}
-
-        {/* 5. RESULT 单轮处决结果公布阶段 */}
-        {roomData.status === 'RESULT' && (
-          <section className="bg-slate-900/90 border border-slate-800 rounded-3xl p-6 text-center space-y-4 shadow-xl">
-            {roomData.lastEliminated?.type === 'ELIMINATED' ? (
-              <>
-                <div className="w-16 h-16 rounded-2xl bg-rose-500/20 border border-rose-500/40 flex items-center justify-center text-4xl mx-auto">
-                  {roomData.lastEliminated.player.avatar}
-                </div>
-                <div className="space-y-1">
-                  <div className="text-xs text-rose-400 font-bold uppercase">
-                    本轮最高票（{roomData.lastEliminated.votesCount} 票）出局
-                  </div>
-                  <h3 className="text-xl font-black text-white">
-                    {roomData.lastEliminated.player.seat}号 【{roomData.lastEliminated.player.name}】
-                  </h3>
-                  <p className="text-sm text-slate-300 pt-1">
-                    经 AI 裁判核实，TA 的真实身份是 ——{' '}
-                    <span className={`px-2.5 py-0.5 rounded-lg font-black ${
-                      roomData.lastEliminated.roleLabel === '平民'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'bg-rose-500/30 text-rose-300'
-                    }`}>
-                      【{roomData.lastEliminated.roleLabel}】
-                    </span>
-                  </p>
-                </div>
-              </>
-            ) : (
-              <div className="space-y-2 py-2">
-                <div className="text-lg font-black text-amber-300">
-                  {roomData.lastEliminated?.reason || '本轮无人出局'}
-                </div>
-              </div>
-            )}
-
-            {isHost ? (
-              <button
-                onClick={() => startSpeakingRound(roomData.players, (roomData.round || 1) + 1, [])}
-                className="w-full max-w-sm mx-auto py-3.5 rounded-2xl bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 font-black text-sm shadow-lg flex items-center justify-center gap-2"
-              >
-                进入第 {(roomData.round || 1) + 1} 轮线下发言 →
-              </button>
-            ) : (
-              <div className="text-xs text-slate-400">等待房主开启下一轮发言...</div>
-            )}
-          </section>
-        )}
-
-        {/* 6. GAME_OVER 真相大白与底牌揭晓结算阶段 */}
-        {roomData.status === 'GAME_OVER' && (
-          <section className="bg-gradient-to-br from-slate-900 via-slate-900 to-violet-950/80 border-2 border-amber-400/60 rounded-3xl p-6 text-center space-y-5 shadow-2xl">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-400/20 border border-amber-400/40 text-amber-300 text-xs font-black">
-              <Crown className="w-4 h-4" />
-              本局真相大白
-            </div>
-
-            <h2 className="text-2xl sm:text-3xl font-black text-white">
-              {roomData.winner === 'CIVILIAN' ? '🎉 平民阵营 获胜！' : '🕵️‍♂️ 卧底阵营 逆袭获胜！'}
-            </h2>
-
-            {/* 双方词语揭秘卡 */}
-            <div className="grid grid-cols-2 gap-3 max-w-md mx-auto">
-              <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30">
-                <div className="text-xs text-emerald-400 font-bold">平民词</div>
-                <div className="text-xl font-black text-white mt-1">{roomData.wordPair?.civilian}</div>
-              </div>
-              <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30">
-                <div className="text-xs text-rose-400 font-bold">卧底词</div>
-                <div className="text-xl font-black text-white mt-1">{roomData.wordPair?.undercover}</div>
-              </div>
-            </div>
-
-            {isHost ? (
-              <div className="flex flex-col sm:flex-row gap-3 justify-center pt-2">
-                <button
-                  onClick={() => handleStartGame(false)}
-                  className="flex-1 py-3.5 px-5 rounded-2xl bg-gradient-to-r from-amber-400 to-orange-500 text-slate-950 font-black text-sm shadow-lg flex items-center justify-center gap-2"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  再来一局（换新词直接发牌）
-                </button>
-                <button
-                  onClick={handleBackToLobby}
-                  className="py-3.5 px-5 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs"
-                >
-                  返回房间调整设置
-                </button>
-              </div>
-            ) : (
-              <div className="text-xs text-amber-300">等待房主开启下一局...</div>
-            )}
-          </section>
-        )}
-
-        {/* ==========================================
-            模块 D: 底部随身防窥底牌抽屉 (游戏进行中常驻)
-           ========================================== */}
-        {roomData.status !== 'LOBBY' && roomData.status !== 'DEALING' && myPlayer && (
-          <section className="pt-1">
-            <div className="rounded-2xl bg-slate-900/95 border border-slate-800 p-3.5 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <span className="text-2xl">{myPlayer.avatar}</span>
-                <div>
-                  <div className="text-xs font-bold text-slate-200">
-                    {myPlayer.seat}号 {myPlayer.name} {myPlayer.isAlive ? '' : '(已出局)'}
-                  </div>
-                  <div className="text-[11px] text-slate-400">
-                    忘了自己的词？长按右侧按钮偷看底牌
-                  </div>
-                </div>
-              </div>
-
-              <button
-                onMouseDown={() => setIsPeekingCard(true)}
-                onMouseUp={() => setIsPeekingCard(false)}
-                onMouseLeave={() => setIsPeekingCard(false)}
-                onTouchStart={() => setIsPeekingCard(true)}
-                onTouchEnd={() => setIsPeekingCard(false)}
-                onClick={() => setIsPeekingCard(!isPeekingCard)}
-                className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition shrink-0 ${
-                  isPeekingCard
-                    ? 'bg-amber-400 text-slate-950 shadow-lg shadow-amber-400/20'
-                    : 'bg-slate-800 text-amber-300 border border-amber-500/30'
-                }`}
-              >
-                {isPeekingCard ? (
-                  <>
-                    <Eye className="w-4 h-4" />
-                    <span>底牌：{myPlayer.word}</span>
-                  </>
-                ) : (
-                  <>
-                    <EyeOff className="w-4 h-4" />
-                    <span>按住偷看底牌</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </section>
-        )}
-      </main>
-
-      {/* 规则弹窗复用 */}
-      {showRulesModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-700 rounded-3xl max-w-md w-full p-6 space-y-4 text-sm text-slate-300 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-              <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                <Award className="w-5 h-5 text-amber-400" />
-                线下聚会《谁是卧底》玩法指南
-              </h3>
-              <button onClick={() => setShowRulesModal(false)} className="text-slate-400 hover:text-white">✕</button>
-            </div>
-            <div className="space-y-3 leading-relaxed text-xs sm:text-sm">
-              <p><strong className="text-amber-300">1. 秘密看牌：</strong>全员入座后，手机会收到一张防窥底牌。大多数人拿到相同的<span className="text-emerald-400">【平民词】</span>，1~2人拿到相似的<span className="text-rose-400">【卧底词】</span>。</p>
-              <p><strong className="text-amber-300">2. 面对面轮流发言：</strong>按照 AI 裁判点名的座位顺序，大家<strong>直接在线下开口</strong>用一句话描述自己的词。禁止直接报出词里的单字！</p>
-              <p><strong className="text-amber-300">3. 手机秘密投票：</strong>每轮发言结束，所有人用自己手机点击最可疑的玩家头像投票。得票最高者出局并由 AI 裁判揭晓身份。</p>
-              <p><strong className="text-amber-300">4. 单机/同屏传阅技巧：</strong>如果有人没带手机或您想单人测试，房主可点击“+ 添加同屏玩家”，并通过顶部的【当前手机操控视角】随时切换不同座位看牌与投票！</p>
-            </div>
-            <button
-              onClick={() => setShowRulesModal(false)}
-              className="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold"
-            >
-              关闭
-            </button>
-          </div>
-        </div>
-      )}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>谁是卧底 · 同屏聚会版</title>
+    <meta name="description" content="4—12人的同屏谁是卧底聚会游戏，轮流看牌、发言、秘密投票与自动计票，无需账号或密钥。">
+    <style>*,:after,:before{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }::backdrop{--tw-border-spacing-x:0;--tw-border-spacing-y:0;--tw-translate-x:0;--tw-translate-y:0;--tw-rotate:0;--tw-skew-x:0;--tw-skew-y:0;--tw-scale-x:1;--tw-scale-y:1;--tw-pan-x: ;--tw-pan-y: ;--tw-pinch-zoom: ;--tw-scroll-snap-strictness:proximity;--tw-gradient-from-position: ;--tw-gradient-via-position: ;--tw-gradient-to-position: ;--tw-ordinal: ;--tw-slashed-zero: ;--tw-numeric-figure: ;--tw-numeric-spacing: ;--tw-numeric-fraction: ;--tw-ring-inset: ;--tw-ring-offset-width:0px;--tw-ring-offset-color:#fff;--tw-ring-color:rgba(59,130,246,.5);--tw-ring-offset-shadow:0 0 #0000;--tw-ring-shadow:0 0 #0000;--tw-shadow:0 0 #0000;--tw-shadow-colored:0 0 #0000;--tw-blur: ;--tw-brightness: ;--tw-contrast: ;--tw-grayscale: ;--tw-hue-rotate: ;--tw-invert: ;--tw-saturate: ;--tw-sepia: ;--tw-drop-shadow: ;--tw-backdrop-blur: ;--tw-backdrop-brightness: ;--tw-backdrop-contrast: ;--tw-backdrop-grayscale: ;--tw-backdrop-hue-rotate: ;--tw-backdrop-invert: ;--tw-backdrop-opacity: ;--tw-backdrop-saturate: ;--tw-backdrop-sepia: ;--tw-contain-size: ;--tw-contain-layout: ;--tw-contain-paint: ;--tw-contain-style: }/*! tailwindcss v3.4.17 | MIT License | https://tailwindcss.com*/*,:after,:before{box-sizing:border-box;border:0 solid #e5e7eb}:after,:before{--tw-content:""}:host,html{line-height:1.5;-webkit-text-size-adjust:100%;-moz-tab-size:4;-o-tab-size:4;tab-size:4;font-family:ui-sans-serif,system-ui,sans-serif,Apple Color Emoji,Segoe UI Emoji,Segoe UI Symbol,Noto Color Emoji;font-feature-settings:normal;font-variation-settings:normal;-webkit-tap-highlight-color:transparent}body{margin:0;line-height:inherit}hr{height:0;color:inherit;border-top-width:1px}abbr:where([title]){-webkit-text-decoration:underline dotted;text-decoration:underline dotted}h1,h2,h3,h4,h5,h6{font-size:inherit;font-weight:inherit}a{color:inherit;text-decoration:inherit}b,strong{font-weight:bolder}code,kbd,pre,samp{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace;font-feature-settings:normal;font-variation-settings:normal;font-size:1em}small{font-size:80%}sub,sup{font-size:75%;line-height:0;position:relative;vertical-align:baseline}sub{bottom:-.25em}sup{top:-.5em}table{text-indent:0;border-color:inherit;border-collapse:collapse}button,input,optgroup,select,textarea{font-family:inherit;font-feature-settings:inherit;font-variation-settings:inherit;font-size:100%;font-weight:inherit;line-height:inherit;letter-spacing:inherit;color:inherit;margin:0;padding:0}button,select{text-transform:none}button,input:where([type=button]),input:where([type=reset]),input:where([type=submit]){-webkit-appearance:button;background-color:transparent;background-image:none}:-moz-focusring{outline:auto}:-moz-ui-invalid{box-shadow:none}progress{vertical-align:baseline}::-webkit-inner-spin-button,::-webkit-outer-spin-button{height:auto}[type=search]{-webkit-appearance:textfield;outline-offset:-2px}::-webkit-search-decoration{-webkit-appearance:none}::-webkit-file-upload-button{-webkit-appearance:button;font:inherit}summary{display:list-item}blockquote,dd,dl,figure,h1,h2,h3,h4,h5,h6,hr,p,pre{margin:0}fieldset{margin:0}fieldset,legend{padding:0}menu,ol,ul{list-style:none;margin:0;padding:0}dialog{padding:0}textarea{resize:vertical}input::-moz-placeholder,textarea::-moz-placeholder{opacity:1;color:#9ca3af}input::placeholder,textarea::placeholder{opacity:1;color:#9ca3af}[role=button],button{cursor:pointer}:disabled{cursor:default}audio,canvas,embed,iframe,img,object,svg,video{display:block;vertical-align:middle}img,video{max-width:100%;height:auto}[hidden]:where(:not([hidden=until-found])){display:none}.pointer-events-none{pointer-events:none}.visible{visibility:visible}.fixed{position:fixed}.absolute{position:absolute}.relative{position:relative}.sticky{position:sticky}.inset-0{inset:0}.-bottom-32{bottom:-8rem}.-left-32{left:-8rem}.-right-32{right:-8rem}.-top-32{top:-8rem}.left-1\/4{left:25%}.left-2{left:.5rem}.right-1\.5{right:.375rem}.top-0{top:0}.top-1\.5{top:.375rem}.top-1\/3{top:33.333333%}.top-2{top:.5rem}.z-0{z-index:0}.z-10{z-index:10}.z-30{z-index:30}.z-50{z-index:50}.mx-auto{margin-left:auto;margin-right:auto}.my-1{margin-top:.25rem;margin-bottom:.25rem}.my-auto{margin-top:auto;margin-bottom:auto}.mb-1{margin-bottom:.25rem}.mt-0\.5{margin-top:.125rem}.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.block{display:block}.flex{display:flex}.grid{display:grid}.hidden{display:none}.h-10{height:2.5rem}.h-12{height:3rem}.h-14{height:3.5rem}.h-44{height:11rem}.h-96{height:24rem}.h-full{height:100%}.min-h-screen{min-height:100vh}.w-10{width:2.5rem}.w-12{width:3rem}.w-14{width:3.5rem}.w-96{width:24rem}.w-full{width:100%}.min-w-0{min-width:0}.max-w-2xl{max-width:42rem}.max-w-lg{max-width:32rem}.max-w-md{max-width:28rem}.max-w-sm{max-width:24rem}.max-w-xs{max-width:20rem}.flex-1{flex:1 1 0%}.shrink-0{flex-shrink:0}@keyframes pulse{50%{opacity:.5}}.animate-pulse{animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}@keyframes spin{to{transform:rotate(1turn)}}.animate-spin{animation:spin 1s linear infinite}.cursor-pointer{cursor:pointer}.select-none{-webkit-user-select:none;-moz-user-select:none;user-select:none}.grid-cols-1{grid-template-columns:repeat(1,minmax(0,1fr))}.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}.grid-cols-6{grid-template-columns:repeat(6,minmax(0,1fr))}.flex-col{flex-direction:column}.items-start{align-items:flex-start}.items-center{align-items:center}.justify-center{justify-content:center}.justify-between{justify-content:space-between}.gap-1\.5{gap:.375rem}.gap-2{gap:.5rem}.gap-2\.5{gap:.625rem}.gap-3{gap:.75rem}.gap-3\.5{gap:.875rem}.space-y-1>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.25rem*var(--tw-space-y-reverse))}.space-y-1\.5>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.375rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.375rem*var(--tw-space-y-reverse))}.space-y-2>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.5rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.5rem*var(--tw-space-y-reverse))}.space-y-3>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(.75rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(.75rem*var(--tw-space-y-reverse))}.space-y-4>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(1rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1rem*var(--tw-space-y-reverse))}.space-y-5>:not([hidden])~:not([hidden]){--tw-space-y-reverse:0;margin-top:calc(1.25rem*(1 - var(--tw-space-y-reverse)));margin-bottom:calc(1.25rem*var(--tw-space-y-reverse))}.overflow-hidden{overflow:hidden}.overflow-x-auto{overflow-x:auto}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.rounded{border-radius:.25rem}.rounded-2xl{border-radius:1rem}.rounded-3xl{border-radius:1.5rem}.rounded-\[14px\]{border-radius:14px}.rounded-full{border-radius:9999px}.rounded-lg{border-radius:.5rem}.rounded-xl{border-radius:.75rem}.border{border-width:1px}.border-2{border-width:2px}.border-4{border-width:4px}.border-b{border-bottom-width:1px}.border-t{border-top-width:1px}.border-amber-400{--tw-border-opacity:1;border-color:rgb(251 191 36/var(--tw-border-opacity,1))}.border-amber-400\/40{border-color:rgba(251,191,36,.4)}.border-amber-500\/40{border-color:rgba(245,158,11,.4)}.border-emerald-500\/30{border-color:rgba(16,185,129,.3)}.border-emerald-500\/40{border-color:rgba(16,185,129,.4)}.border-rose-400{--tw-border-opacity:1;border-color:rgb(251 113 133/var(--tw-border-opacity,1))}.border-rose-500{--tw-border-opacity:1;border-color:rgb(244 63 94/var(--tw-border-opacity,1))}.border-rose-500\/30{border-color:rgba(244,63,94,.3)}.border-rose-500\/40{border-color:rgba(244,63,94,.4)}.border-slate-700{--tw-border-opacity:1;border-color:rgb(51 65 85/var(--tw-border-opacity,1))}.border-slate-800{--tw-border-opacity:1;border-color:rgb(30 41 59/var(--tw-border-opacity,1))}.border-violet-400{--tw-border-opacity:1;border-color:rgb(167 139 250/var(--tw-border-opacity,1))}.border-violet-500\/30{border-color:rgba(139,92,246,.3)}.border-violet-500\/40{border-color:rgba(139,92,246,.4)}.border-t-transparent{border-top-color:transparent}.bg-amber-400{--tw-bg-opacity:1;background-color:rgb(251 191 36/var(--tw-bg-opacity,1))}.bg-amber-400\/20{background-color:rgba(251,191,36,.2)}.bg-amber-500{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}.bg-amber-500\/15{background-color:rgba(245,158,11,.15)}.bg-amber-500\/20{background-color:rgba(245,158,11,.2)}.bg-black\/80{background-color:rgba(0,0,0,.8)}.bg-emerald-500{--tw-bg-opacity:1;background-color:rgb(16 185 129/var(--tw-bg-opacity,1))}.bg-emerald-500\/10{background-color:rgba(16,185,129,.1)}.bg-emerald-500\/20{background-color:rgba(16,185,129,.2)}.bg-rose-500\/10{background-color:rgba(244,63,94,.1)}.bg-rose-500\/20{background-color:rgba(244,63,94,.2)}.bg-rose-500\/30{background-color:rgba(244,63,94,.3)}.bg-rose-600\/15{background-color:rgba(225,29,72,.15)}.bg-slate-800{--tw-bg-opacity:1;background-color:rgb(30 41 59/var(--tw-bg-opacity,1))}.bg-slate-900{--tw-bg-opacity:1;background-color:rgb(15 23 42/var(--tw-bg-opacity,1))}.bg-slate-900\/80{background-color:rgba(15,23,42,.8)}.bg-slate-950{--tw-bg-opacity:1;background-color:rgb(2 6 23/var(--tw-bg-opacity,1))}.bg-slate-950\/90{background-color:rgba(2,6,23,.9)}.bg-violet-500\/20{background-color:rgba(139,92,246,.2)}.bg-violet-600{--tw-bg-opacity:1;background-color:rgb(124 58 237/var(--tw-bg-opacity,1))}.bg-violet-600\/20{background-color:rgba(124,58,237,.2)}.bg-violet-950\/60{background-color:rgba(46,16,101,.6)}.bg-gradient-to-br{background-image:linear-gradient(to bottom right,var(--tw-gradient-stops))}.bg-gradient-to-r{background-image:linear-gradient(to right,var(--tw-gradient-stops))}.from-amber-200{--tw-gradient-from:#fde68a var(--tw-gradient-from-position);--tw-gradient-to:hsla(48,97%,77%,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}.from-amber-400{--tw-gradient-from:#fbbf24 var(--tw-gradient-from-position);--tw-gradient-to:rgba(251,191,36,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}.from-amber-500{--tw-gradient-from:#f59e0b var(--tw-gradient-from-position);--tw-gradient-to:rgba(245,158,11,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}.from-amber-500\/20{--tw-gradient-from:rgba(245,158,11,.2) var(--tw-gradient-from-position);--tw-gradient-to:rgba(245,158,11,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}.from-slate-900{--tw-gradient-from:#0f172a var(--tw-gradient-from-position);--tw-gradient-to:rgba(15,23,42,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}.from-violet-500{--tw-gradient-from:#8b5cf6 var(--tw-gradient-from-position);--tw-gradient-to:rgba(139,92,246,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}.from-violet-950\/90{--tw-gradient-from:rgba(46,16,101,.9) var(--tw-gradient-from-position);--tw-gradient-to:rgba(46,16,101,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),var(--tw-gradient-to)}.via-slate-900{--tw-gradient-to:rgba(15,23,42,0) var(--tw-gradient-to-position);--tw-gradient-stops:var(--tw-gradient-from),#0f172a var(--tw-gradient-via-position),var(--tw-gradient-to)}.to-amber-500{--tw-gradient-to:#f59e0b var(--tw-gradient-to-position)}.to-rose-500{--tw-gradient-to:#f43f5e var(--tw-gradient-to-position)}.to-slate-900{--tw-gradient-to:#0f172a var(--tw-gradient-to-position)}.to-violet-200{--tw-gradient-to:#ddd6fe var(--tw-gradient-to-position)}.to-violet-600{--tw-gradient-to:#7c3aed var(--tw-gradient-to-position)}.to-violet-950{--tw-gradient-to:#2e1065 var(--tw-gradient-to-position)}.bg-clip-text{-webkit-background-clip:text;background-clip:text}.p-0\.5{padding:.125rem}.p-1\.5{padding:.375rem}.p-3{padding:.75rem}.p-4{padding:1rem}.p-5{padding:1.25rem}.p-6{padding:1.5rem}.px-1{padding-left:.25rem;padding-right:.25rem}.px-1\.5{padding-left:.375rem;padding-right:.375rem}.px-2\.5{padding-left:.625rem;padding-right:.625rem}.px-3{padding-left:.75rem;padding-right:.75rem}.px-4{padding-left:1rem;padding-right:1rem}.py-0\.5{padding-top:.125rem;padding-bottom:.125rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-1\.5{padding-top:.375rem;padding-bottom:.375rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-2\.5{padding-top:.625rem;padding-bottom:.625rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-3\.5{padding-top:.875rem;padding-bottom:.875rem}.py-4{padding-top:1rem;padding-bottom:1rem}.py-6{padding-top:1.5rem;padding-bottom:1.5rem}.pb-12{padding-bottom:3rem}.pb-3{padding-bottom:.75rem}.pt-2{padding-top:.5rem}.pt-4{padding-top:1rem}.text-left{text-align:left}.text-center{text-align:center}.font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,Liberation Mono,Courier New,monospace}.text-2xl{font-size:1.5rem;line-height:2rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}.text-4xl{font-size:2.25rem;line-height:2.5rem}.text-\[10px\]{font-size:10px}.text-\[11px\]{font-size:11px}.text-base{font-size:1rem;line-height:1.5rem}.text-lg{font-size:1.125rem;line-height:1.75rem}.text-sm{font-size:.875rem;line-height:1.25rem}.text-xl{font-size:1.25rem;line-height:1.75rem}.text-xs{font-size:.75rem;line-height:1rem}.font-black{font-weight:900}.font-bold{font-weight:700}.font-medium{font-weight:500}.font-semibold{font-weight:600}.uppercase{text-transform:uppercase}.leading-relaxed{line-height:1.625}.tracking-widest{letter-spacing:.1em}.text-amber-200{--tw-text-opacity:1;color:rgb(253 230 138/var(--tw-text-opacity,1))}.text-amber-300{--tw-text-opacity:1;color:rgb(252 211 77/var(--tw-text-opacity,1))}.text-amber-400{--tw-text-opacity:1;color:rgb(251 191 36/var(--tw-text-opacity,1))}.text-emerald-300{--tw-text-opacity:1;color:rgb(110 231 183/var(--tw-text-opacity,1))}.text-rose-200{--tw-text-opacity:1;color:rgb(254 205 211/var(--tw-text-opacity,1))}.text-rose-300{--tw-text-opacity:1;color:rgb(253 164 175/var(--tw-text-opacity,1))}.text-rose-400{--tw-text-opacity:1;color:rgb(251 113 133/var(--tw-text-opacity,1))}.text-slate-100{--tw-text-opacity:1;color:rgb(241 245 249/var(--tw-text-opacity,1))}.text-slate-200{--tw-text-opacity:1;color:rgb(226 232 240/var(--tw-text-opacity,1))}.text-slate-300{--tw-text-opacity:1;color:rgb(203 213 225/var(--tw-text-opacity,1))}.text-slate-400{--tw-text-opacity:1;color:rgb(148 163 184/var(--tw-text-opacity,1))}.text-slate-500{--tw-text-opacity:1;color:rgb(100 116 139/var(--tw-text-opacity,1))}.text-slate-950{--tw-text-opacity:1;color:rgb(2 6 23/var(--tw-text-opacity,1))}.text-transparent{color:transparent}.text-violet-200{--tw-text-opacity:1;color:rgb(221 214 254/var(--tw-text-opacity,1))}.text-violet-300{--tw-text-opacity:1;color:rgb(196 181 253/var(--tw-text-opacity,1))}.text-white{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.opacity-40{opacity:.4}.shadow-2xl{--tw-shadow:0 25px 50px -12px rgba(0,0,0,.25);--tw-shadow-colored:0 25px 50px -12px var(--tw-shadow-color)}.shadow-2xl,.shadow-lg{box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}.shadow-lg{--tw-shadow:0 10px 15px -3px rgba(0,0,0,.1),0 4px 6px -4px rgba(0,0,0,.1);--tw-shadow-colored:0 10px 15px -3px var(--tw-shadow-color),0 4px 6px -4px var(--tw-shadow-color)}.shadow-xl{--tw-shadow:0 20px 25px -5px rgba(0,0,0,.1),0 8px 10px -6px rgba(0,0,0,.1);--tw-shadow-colored:0 20px 25px -5px var(--tw-shadow-color),0 8px 10px -6px var(--tw-shadow-color);box-shadow:var(--tw-ring-offset-shadow,0 0 #0000),var(--tw-ring-shadow,0 0 #0000),var(--tw-shadow)}.outline{outline-style:solid}.blur{--tw-blur:blur(8px)}.blur,.blur-3xl{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}.blur-3xl{--tw-blur:blur(64px)}.grayscale{--tw-grayscale:grayscale(100%)}.filter,.grayscale{filter:var(--tw-blur) var(--tw-brightness) var(--tw-contrast) var(--tw-grayscale) var(--tw-hue-rotate) var(--tw-invert) var(--tw-saturate) var(--tw-sepia) var(--tw-drop-shadow)}.backdrop-blur-md{--tw-backdrop-blur:blur(12px)}.backdrop-blur-md,.backdrop-blur-sm{-webkit-backdrop-filter:var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia);backdrop-filter:var(--tw-backdrop-blur) var(--tw-backdrop-brightness) var(--tw-backdrop-contrast) var(--tw-backdrop-grayscale) var(--tw-backdrop-hue-rotate) var(--tw-backdrop-invert) var(--tw-backdrop-opacity) var(--tw-backdrop-saturate) var(--tw-backdrop-sepia)}.backdrop-blur-sm{--tw-backdrop-blur:blur(4px)}.transition{transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,-webkit-backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter;transition-property:color,background-color,border-color,text-decoration-color,fill,stroke,opacity,box-shadow,transform,filter,backdrop-filter,-webkit-backdrop-filter;transition-timing-function:cubic-bezier(.4,0,.2,1);transition-duration:.15s}.selection\:bg-amber-500 ::-moz-selection{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}.selection\:bg-amber-500 ::selection{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}.selection\:text-slate-950 ::-moz-selection{--tw-text-opacity:1;color:rgb(2 6 23/var(--tw-text-opacity,1))}.selection\:text-slate-950 ::selection{--tw-text-opacity:1;color:rgb(2 6 23/var(--tw-text-opacity,1))}.selection\:bg-amber-500::-moz-selection{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}.selection\:bg-amber-500::selection{--tw-bg-opacity:1;background-color:rgb(245 158 11/var(--tw-bg-opacity,1))}.selection\:text-slate-950::-moz-selection{--tw-text-opacity:1;color:rgb(2 6 23/var(--tw-text-opacity,1))}.selection\:text-slate-950::selection{--tw-text-opacity:1;color:rgb(2 6 23/var(--tw-text-opacity,1))}.hover\:border-rose-400:hover{--tw-border-opacity:1;border-color:rgb(251 113 133/var(--tw-border-opacity,1))}.hover\:text-rose-400:hover{--tw-text-opacity:1;color:rgb(251 113 133/var(--tw-text-opacity,1))}.hover\:text-white:hover{--tw-text-opacity:1;color:rgb(255 255 255/var(--tw-text-opacity,1))}.focus\:border-amber-400:focus{--tw-border-opacity:1;border-color:rgb(251 191 36/var(--tw-border-opacity,1))}.focus\:outline-none:focus{outline:2px solid transparent;outline-offset:2px}@media (min-width:640px){.sm\:inline{display:inline}.sm\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.sm\:grid-cols-4{grid-template-columns:repeat(4,minmax(0,1fr))}.sm\:text-sm{font-size:.875rem;line-height:1.25rem}}</style>
+    <style>
+        body { font-family: system-ui, -apple-system, 'Microsoft YaHei', sans-serif; }
+        button { touch-action: manipulation; }
+        button:disabled { opacity: .55; cursor: not-allowed; }
+        #secret-card { touch-action: none; -webkit-user-select: none; user-select: none; }
+        button:focus-visible, [tabindex]:focus-visible { outline: 2px solid #fbbf24; outline-offset: 4px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between selection:bg-amber-500 selection:text-slate-950">
+
+    <!-- 背景光晕装饰 -->
+    <div class="pointer-events-none fixed inset-0 overflow-hidden z-0">
+        <div class="absolute -top-32 -left-32 w-96 h-96 bg-violet-600/20 rounded-full blur-3xl"></div>
+        <div class="absolute top-1/3 -right-32 w-96 h-96 bg-amber-500/15 rounded-full blur-3xl"></div>
+        <div class="absolute -bottom-32 left-1/4 w-96 h-96 bg-rose-600/15 rounded-full blur-3xl"></div>
     </div>
-  );
-}
+
+    <!-- 动态容器 -->
+    <div id="app" class="relative z-10 flex flex-col min-h-screen justify-between">
+        <!-- 动态渲染区域由 JS 控制 -->
+        <div class="flex items-center justify-center flex-1 p-6">
+            <div class="text-center space-y-3">
+                <div class="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
+                <p class="text-sm text-slate-400">正在准备聚会...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 同屏游戏核心逻辑 -->
+    <script type="module">
+        // 本地同屏房间：数据仅保存在当前浏览器标签页，不进行网络传输。
+        const STORAGE_KEY = 'undercover-party-room-v1';
+        const UID_KEY = 'undercover-party-player-v1';
+        function readStorage(key) { try { return sessionStorage.getItem(key); } catch { return null; } }
+        function writeStorage(key, value) { try { sessionStorage.setItem(key, value); } catch {} }
+        function escapeHtml(value) { return String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+        let localRoom = null;
+        try { localRoom = JSON.parse(readStorage(STORAGE_KEY)); } catch {}
+        if (!localRoom || !Array.isArray(localRoom.players) || !localRoom.settings) localRoom = null;
+        let roomListener = null;
+        const db = {}; // 与原游戏动作共用一个本地房间适配层。
+        const appId = 'undercover-party-local';
+        const doc = (...args) => args.at(-1);
+        function snapshot() { return {exists: () => !!localRoom, data: () => structuredClone(localRoom)}; }
+        function publishRoom() { writeStorage(STORAGE_KEY, JSON.stringify(localRoom)); if (roomListener) roomListener(snapshot()); }
+        async function setDoc(ref, value) { localRoom = structuredClone(value); publishRoom(); }
+        async function updateDoc(ref, patch) {
+            if (!localRoom) return;
+            const next = structuredClone(localRoom);
+            for (const [key, value] of Object.entries(patch)) {
+                const path = key.split('.');
+                let target = next;
+                for (const part of path.slice(0, -1)) target = target[part];
+                target[path.at(-1)] = structuredClone(value);
+            }
+            if (next.status === 'SPEAKING' && (localRoom.status !== 'SPEAKING' || next.currentSpeakerId !== localRoom.currentSpeakerId || next.round !== localRoom.round)) next.turnStartedAt = Date.now();
+            localRoom = next;
+            publishRoom();
+        }
+        function onSnapshot(ref, callback) { roomListener = callback; callback(snapshot()); return () => { roomListener = null; }; }
+        let timerTurn = '';
+        let timerDeadline = 0;
+
+        let currentUser = null;
+        let currentRoomCode = '';
+        let roomData = null;
+        let unsubscribeRoom = null;
+        
+        // 本地交互缓存状态
+        let nickname = `玩家${Math.floor(100 + Math.random() * 900)}`;
+        const AVATARS = ['🦊', '🐼', '🦁', '🐸', '🐙', '🦄', '🐯', '🦉', '🐝', '🦖', '👽', '🤠'];
+        let selectedAvatar = AVATARS[Math.floor(Math.random() * AVATARS.length)];
+        let activeControlId = null; // 允许同屏切换视角测试
+        let isPeekingCard = false;
+        let ttsEnabled = true;
+        let aiThinking = false;
+        let speakerKeyword = '';
+        let customThemeInput = '';
+        let roomCodeInput = '';
+        let errorMsg = '';
+        let showRulesModal = false;
+        let timeLeft = 30;
+        let timerInterval = null;
+        let lastSpokenMsg = '';
+
+        // ==========================================
+        // 2. 精选聚会词库
+        // ==========================================
+        const WORD_LIBRARY = {
+            daily: {
+                name: '🍹 日常与美食',
+                pairs: [
+                    { c: '牛奶', u: '豆浆', hint: '都是早餐常客，一个动物源，一个植物源' },
+                    { c: '火锅', u: '麻辣烫', hint: '都是热气腾腾的快乐，但社交属性差很多' },
+                    { c: '保温杯', u: '热水袋', hint: '都能装热水带来温暖，但一个进肚，一个暖手' },
+                    { c: '可口可乐', u: '百事可乐', hint: '世纪红蓝大战，肥宅快乐水的两大巨头' },
+                    { c: '洗发水', u: '沐浴露', hint: '浴室双雄，泡沫丰富，用错了其实也没大事' },
+                    { c: '包子', u: '饺子', hint: '传统面食有馅家族，皮的厚度和形状不同' }
+                ]
+            },
+            party: {
+                name: '🎭 聚会搞怪与情感',
+                pairs: [
+                    { c: '前任', u: '备胎', hint: '感情里最微妙的两种存在，一个在过去，一个在候场' },
+                    { c: '暗恋', u: '单恋', hint: '都是一个人的兵荒马乱，区别在于对方知不知道' },
+                    { c: '撒娇', u: '卖萌', hint: '让人心软的技能，一个偏语气动作，一个偏表情状态' },
+                    { c: '熬夜', u: '失眠', hint: '都是凌晨三点还不睡，一个是主动狂欢，一个是被动折磨' },
+                    { c: '直男', u: '暖男', hint: '形容男性的高频词，一个不懂风情，一个中央空调' }
+                ]
+            },
+            pop: {
+                name: '🎬 影视与动漫脑洞',
+                pairs: [
+                    { c: '蜘蛛侠', u: '蝙蝠侠', hint: '美漫超级英雄，一个靠变异吐丝，一个靠钞能力夜巡' },
+                    { c: '柯南', u: '福尔摩斯', hint: '走到哪死到哪的推理大师，一个是小学生，一个是英伦绅士' },
+                    { c: '孙悟空', u: '猪八戒', hint: '西天取经核心团队，一个武力担当，一个气氛与退堂鼓担当' },
+                    { c: '哈利波特', u: '指环王', hint: '西方魔幻史诗巨作，一个拿魔杖骑扫帚，一个送戒指毁魔戒' }
+                ]
+            }
+        };
+
+        // ==========================================
+        // 3. Gemini 内置主持
+        // ==========================================
+        // 此版本使用内置词库与规则主持，不请求外部 AI 服务。
+        async function callGeminiAPI() { return null; }
+
+        // ==========================================
+        // 4. 语音播报 TTS
+        // ==========================================
+        function speakText(text) {
+            if (!ttsEnabled || !('speechSynthesis' in window) || !text) return;
+            try {
+                window.speechSynthesis.cancel();
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'zh-CN';
+                utterance.rate = 1.08;
+                utterance.pitch = 1.05;
+                window.speechSynthesis.speak(utterance);
+            } catch (e) {
+                console.warn('TTS error:', e);
+            }
+        }
+
+        // ==========================================
+        // 5. 鉴权与房间监听绑定
+        // ==========================================
+        async function initApp() {
+            let uid = readStorage(UID_KEY);
+            if (!uid) { uid = 'local_' + (globalThis.crypto?.randomUUID?.() || Date.now().toString(36) + Math.random().toString(36).slice(2)); writeStorage(UID_KEY, uid); }
+            currentUser = {uid};
+            activeControlId = uid;
+            if (localRoom && localRoom.hostId === uid) {
+                currentRoomCode = localRoom.roomCode;
+                listenRoom(currentRoomCode);
+            } else render();
+        }
+
+        function listenRoom(code) {
+            if (!db) return;
+            if (unsubscribeRoom) unsubscribeRoom();
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', code);
+            unsubscribeRoom = onSnapshot(roomRef, (snapshot) => {
+                if (snapshot.exists()) {
+                    roomData = snapshot.data();
+                    // 检查 AI 裁判语音播报
+                    if (roomData.aiReferee?.message && roomData.aiReferee.message !== lastSpokenMsg) {
+                        lastSpokenMsg = roomData.aiReferee.message;
+                        speakText(roomData.aiReferee.message);
+                    }
+                    const turn = roomData.status === 'SPEAKING' ? `${roomData.round}:${roomData.currentSpeakerId}:${roomData.turnStartedAt}` : '';
+                    if (turn && timerTurn !== turn) {
+                        timerTurn = turn;
+                        startTimer(roomData.settings?.speakTime || 30, roomData.turnStartedAt);
+                    } else if (!turn) {
+                        clearInterval(timerInterval); timerInterval = null; timerTurn = '';
+                    }
+                } else {
+                    errorMsg = '房间已解散或不存在';
+                    currentRoomCode = '';
+                    roomData = null;
+                }
+                render();
+            }, (err) => {
+                console.error('Room sync error:', err);
+                errorMsg = '网络同步失败';
+                render();
+            });
+        }
+
+        function startTimer(seconds, startedAt = Date.now()) {
+            clearInterval(timerInterval);
+            timerDeadline = startedAt + seconds * 1000;
+            timeLeft = Math.max(0, Math.ceil((timerDeadline - Date.now()) / 1000));
+            timerInterval = setInterval(() => {
+                timeLeft = Math.max(0, Math.ceil((timerDeadline - Date.now()) / 1000));
+                updateTimerDisplay();
+                if (timeLeft === 0) { clearInterval(timerInterval); timerInterval = null; }
+            }, 250);
+        }
+
+        function updateTimerDisplay() {
+            const el = document.getElementById('timer-badge');
+            if (el) {
+                el.textContent = `${timeLeft}s`;
+                if (timeLeft <= 8) {
+                    el.className = 'px-3 py-1 rounded-full font-mono text-sm font-black flex items-center gap-1.5 bg-rose-500/20 text-rose-400 animate-pulse';
+                }
+            }
+        }
+
+        // ==========================================
+        // 6. 核心游戏房间操作动作 (Create / Join / Start / Vote)
+        // ==========================================
+        window.createRoom = async function() {
+            if (!currentUser || !db) return;
+            errorMsg = '';
+            isPeekingCard = false;
+            nickname = document.getElementById('nickname-input')?.value.trim() || nickname;
+            if (!nickname) {
+                errorMsg = '请输入聚会昵称';
+                render();
+                return;
+            }
+            const code = Math.floor(1000 + Math.random() * 9000).toString();
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', code);
+            const initialPlayer = {
+                id: currentUser.uid,
+                name: nickname,
+                avatar: selectedAvatar,
+                seat: 1,
+                role: null,
+                word: null,
+                isAlive: true,
+                isSimulated: false,
+                hasReadySeenCard: false,
+                notes: []
+            };
+            const initialRoom = {
+                roomCode: code,
+                hostId: currentUser.uid,
+                status: 'LOBBY',
+                round: 1,
+                settings: { undercoverCount: 1, hasBlank: false, category: 'daily', speakTime: 30, aiStyle: '幽默毒舌' },
+                wordPair: { civilian: '', undercover: '', hint: '', source: '' },
+                players: [initialPlayer],
+                speakingOrder: [],
+                currentSpeakerId: null,
+                pkPlayers: [],
+                votes: {},
+                lastEliminated: null,
+                winner: null,
+                aiReferee: {
+                    message: `欢迎来到 ${code} 号聚会房间！我是本场自动主持。请添加同屏玩家，凑齐 4 人以上就能发牌啦！`,
+                    mood: 'welcome',
+                    timestamp: Date.now()
+                }
+            };
+            try {
+                await setDoc(roomRef, initialRoom);
+                currentRoomCode = code;
+                activeControlId = currentUser.uid;
+                listenRoom(code);
+            } catch (e) {
+                console.error(e);
+                errorMsg = '创建房间失败';
+                render();
+            }
+        };
+
+        window.resumeRoom = function() {
+            if (!localRoom) return;
+            currentRoomCode = localRoom.roomCode;
+            activeControlId = currentUser.uid;
+            errorMsg = '';
+            listenRoom(currentRoomCode);
+        };
+
+        window.addSimulatedPlayer = async function() {
+            if (!roomData || roomData.hostId !== currentUser?.uid) return;
+            if (roomData.status !== 'LOBBY') return;
+            const demoNames = ['阿强', '小美', '卡卡', '老王', '萌萌', '大壮'];
+            const seatNum = roomData.players.length + 1;
+            if (seatNum > 12) return;
+            const usedNames = new Set(roomData.players.map(p => p.name));
+            const name = document.getElementById('friend-name-input')?.value.trim().slice(0,10) || demoNames.find(n => !usedNames.has(n)) || `好友${seatNum}号`;
+            const newPlayer = {
+                id: `sim_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+                name,
+                avatar: AVATARS[seatNum % AVATARS.length],
+                seat: seatNum,
+                role: null,
+                word: null,
+                isAlive: true,
+                isSimulated: true,
+                hasReadySeenCard: false,
+                notes: []
+            };
+            roomData.players.push(newPlayer);
+            if (roomData.players.length >= 7) roomData.settings.undercoverCount = 2;
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            await updateDoc(roomRef, {
+                players: roomData.players,
+                'settings.undercoverCount': roomData.settings.undercoverCount,
+                aiReferee: { message: `已添加 ${seatNum} 号【${name}】！在顶部切换玩家，将设备交给对应的人。`, timestamp: Date.now() }
+            });
+        };
+
+        window.removePlayer = async function(pid) {
+            if (!roomData || roomData.hostId !== currentUser?.uid || roomData.status !== 'LOBBY') return;
+            roomData.players = roomData.players.filter(p => p.id !== pid).map((p, idx) => ({ ...p, seat: idx + 1 }));
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            await updateDoc(roomRef, { players: roomData.players });
+        };
+
+        window.updateSetting = async function(key, val) {
+            if (!roomData || roomData.hostId !== currentUser?.uid) return;
+            roomData.settings[key] = val;
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            await updateDoc(roomRef, { [`settings.${key}`]: val });
+        };
+
+        window.startGame = async function(useAI = false) {
+            if (!roomData || roomData.hostId !== currentUser?.uid || roomData.status !== 'LOBBY' || aiThinking) return;
+            errorMsg = '';
+            if (roomData.players.length < 4) {
+                errorMsg = '至少需要 4 人才能开局';
+                render();
+                return;
+            }
+            aiThinking = true;
+            render();
+
+            let pair = null;
+            let opening = '';
+            if (useAI) {
+                const schema = {
+                    type: "OBJECT",
+                    properties: { civilianWord: { type: "STRING" }, undercoverWord: { type: "STRING" }, subtleHint: { type: "STRING" }, openingJoke: { type: "STRING" } },
+                    required: ["civilianWord", "undercoverWord", "subtleHint", "openingJoke"]
+                };
+                const res = await callGeminiAPI(`请为聚会生成一组《谁是卧底》词条。主题：${customThemeInput || '年轻人日常'}`, `你是AI裁判`, schema);
+                if (res) {
+                    pair = { civilian: res.civilianWord, undercover: res.undercoverWord, hint: res.subtleHint, source: '✨ AI 实时命题' };
+                    opening = res.openingJoke;
+                }
+            }
+            if (!pair) {
+                const cat = WORD_LIBRARY[roomData.settings.category] || WORD_LIBRARY.daily;
+                const item = cat.pairs[Math.floor(Math.random() * cat.pairs.length)];
+                const flip = Math.random() > 0.5;
+                pair = { civilian: flip ? item.c : item.u, undercover: flip ? item.u : item.c, hint: item.hint, source: cat.name };
+                opening = '底牌已准备好！请轮流接过设备，按住查看自己的词，确认后交给下一位。';
+            }
+
+            const total = roomData.players.length;
+            const bCount = roomData.settings.hasBlank && total >= 5 ? 1 : 0;
+            const uCount = Math.max(1, Math.min(roomData.settings.undercoverCount || 1, Math.floor((total - 1) / 2) - bCount));
+            const cCount = total - uCount - bCount;
+            const pool = [...Array(cCount).fill('CIVILIAN'), ...Array(uCount).fill('UNDERCOVER'), ...Array(bCount).fill('BLANK')];
+            
+            for (let i = pool.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [pool[i], pool[j]] = [pool[j], pool[i]];
+            }
+
+            roomData.players = roomData.players.map((p, idx) => {
+                const role = pool[idx];
+                let word = pair.civilian;
+                if (role === 'UNDERCOVER') word = pair.undercover;
+                if (role === 'BLANK') word = '【白板（盲猜词义）】';
+                return { ...p, role, word, isAlive: true, hasReadySeenCard: false, notes: [] };
+            });
+
+            aiThinking = false;
+            isPeekingCard = false;
+            activeControlId = currentUser.uid;
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            await updateDoc(roomRef, {
+                status: 'DEALING',
+                round: 1,
+                wordPair: pair,
+                players: roomData.players,
+                aiReferee: { message: opening, timestamp: Date.now() }
+            });
+        };
+
+        window.confirmSeenCard = async function() {
+            if (!roomData || roomData.status !== 'DEALING') return;
+            const effId = activeControlId || currentUser?.uid;
+            const p = roomData.players.find(pl => pl.id === effId);
+            if (!p || p.hasReadySeenCard) return;
+            isPeekingCard = false;
+            p.hasReadySeenCard = true;
+            const allReady = roomData.players.every(pl => pl.hasReadySeenCard);
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            if (!allReady) activeControlId = roomData.players.find(pl => !pl.hasReadySeenCard).id;
+            if (allReady) {
+                await startSpeakingRound(roomData.players, 1, []);
+            } else {
+                await updateDoc(roomRef, { players: roomData.players });
+            }
+        };
+
+        async function startSpeakingRound(playersList, roundNum, pkIds = []) {
+            const eligible = pkIds.length > 0 ? playersList.filter(p => pkIds.includes(p.id)) : playersList.filter(p => p.isAlive);
+            if (eligible.length === 0) return;
+            const startIdx = Math.floor(Math.random() * eligible.length);
+            const orderedIds = [...eligible.slice(startIdx).map(p => p.id), ...eligible.slice(0, startIdx).map(p => p.id)];
+            const firstSpk = playersList.find(p => p.id === orderedIds[0]);
+            const isPK = pkIds.length > 0;
+            const msg = isPK ? `平票PK！请 ${firstSpk.seat}号【${firstSpk.name}】辩解发言！` : `第 ${roundNum} 轮发言开始！由 ${firstSpk.seat}号【${firstSpk.name}】打头阵！`;
+            
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            await updateDoc(roomRef, {
+                players: playersList,
+                status: 'SPEAKING',
+                round: roundNum,
+                speakingOrder: orderedIds,
+                currentSpeakerId: orderedIds[0],
+                pkPlayers: pkIds,
+                votes: {},
+                aiReferee: { message: msg, timestamp: Date.now() }
+            });
+        }
+
+        window.finishSpeaking = async function() {
+            if (!roomData || roomData.status !== 'SPEAKING') return;
+            const currentId = roomData.currentSpeakerId;
+            const order = roomData.speakingOrder || [];
+            const idx = order.indexOf(currentId);
+            const kwInput = document.getElementById('speaker-keyword-input');
+            if (kwInput && kwInput.value.trim()) {
+                speakerKeyword = kwInput.value.trim();
+                roomData.players = roomData.players.map(p => {
+                    if (p.id === currentId) p.notes = [...(p.notes || []), `R${roomData.round}: ${speakerKeyword}`];
+                    return p;
+                });
+                speakerKeyword = '';
+            }
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            if (idx >= 0 && idx < order.length - 1) {
+                const nextId = order[idx + 1];
+                const nextSpk = roomData.players.find(p => p.id === nextId);
+                await updateDoc(roomRef, {
+                    players: roomData.players,
+                    currentSpeakerId: nextId,
+                    aiReferee: { message: `接下来请 ${nextSpk.seat}号【${nextSpk.name}】发言！`, timestamp: Date.now() }
+                });
+            } else {
+                await updateDoc(roomRef, {
+                    players: roomData.players,
+                    status: 'VOTING',
+                    currentSpeakerId: null,
+                    votes: {},
+                    aiReferee: { message: `全员发言完毕！请轮流接过设备秘密投票，投票后切换至下一位。`, timestamp: Date.now() }
+                });
+            }
+        };
+
+        window.castVote = async function(targetId) {
+            if (!roomData || roomData.status !== 'VOTING') return;
+            const effId = activeControlId || currentUser?.uid;
+            const myPl = roomData.players.find(p => p.id === effId);
+            if (!myPl || !myPl.isAlive || targetId === myPl.id || roomData.votes?.[myPl.id] !== undefined) return;
+            if (targetId !== 'ABSTAIN' && (!roomData.players.some(p => p.id === targetId && p.isAlive) || (roomData.pkPlayers?.length && !roomData.pkPlayers.includes(targetId)))) return;
+            roomData.votes = roomData.votes || {};
+            roomData.votes[myPl.id] = targetId;
+            const alive = roomData.players.filter(p => p.isAlive);
+            const allVoted = alive.every(p => roomData.votes[p.id] !== undefined);
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            const nextVoter = alive.find(p => roomData.votes[p.id] === undefined);
+            if (nextVoter) activeControlId = nextVoter.id;
+            if (allVoted) {
+                await tallyVotes(roomData.votes);
+            } else {
+                await updateDoc(roomRef, { votes: roomData.votes });
+            }
+        };
+
+        async function tallyVotes(votesMap) {
+            const counts = {};
+            Object.values(votesMap).forEach(tid => {
+                if (tid && tid !== 'ABSTAIN') counts[tid] = (counts[tid] || 0) + 1;
+            });
+            let maxV = 0;
+            Object.values(counts).forEach(c => { if (c > maxV) maxV = c; });
+            const topIds = Object.keys(counts).filter(id => counts[id] === maxV);
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+
+            if (maxV === 0 || topIds.length === 0) {
+                await updateDoc(roomRef, {
+                    votes: votesMap,
+                    status: 'RESULT',
+                    lastEliminated: { type: 'NONE', reason: '全员弃票，本轮平安夜无人出局！' },
+                    aiReferee: { message: `全员弃票！平安夜无人出局！`, timestamp: Date.now() }
+                });
+                return;
+            }
+
+            if (topIds.length > 1) {
+                if (!roomData.pkPlayers || roomData.pkPlayers.length === 0) {
+                    await startSpeakingRound(roomData.players, roomData.round, topIds);
+                    return;
+                } else {
+                    await updateDoc(roomRef, {
+                        votes: votesMap,
+                        status: 'RESULT',
+                        pkPlayers: [],
+                        lastEliminated: { type: 'TIE_SAFE', reason: `PK平票，本轮平安夜无人出局！` },
+                        aiReferee: { message: `PK依然平票，无人出局！`, timestamp: Date.now() }
+                    });
+                    return;
+                }
+            }
+
+            const elimId = topIds[0];
+            const elimPlayer = roomData.players.find(p => p.id === elimId);
+            roomData.players = roomData.players.map(p => p.id === elimId ? { ...p, isAlive: false } : p);
+
+            const aliveList = roomData.players.filter(p => p.isAlive);
+            const aliveU = aliveList.filter(p => p.role === 'UNDERCOVER' || p.role === 'BLANK');
+            const aliveC = aliveList.filter(p => p.role === 'CIVILIAN');
+
+            let winner = null;
+            if (aliveU.length === 0) winner = 'CIVILIAN';
+            else if (aliveC.length <= aliveU.length || aliveList.length <= 2) winner = 'UNDERCOVER';
+
+            const roleLbl = elimPlayer.role === 'CIVILIAN' ? '平民' : elimPlayer.role === 'UNDERCOVER' ? '卧底' : '白板';
+
+            if (winner) {
+                await updateDoc(roomRef, {
+                    players: roomData.players,
+                    votes: votesMap,
+                    status: 'GAME_OVER',
+                    winner,
+                    pkPlayers: [],
+                    lastEliminated: { type: 'ELIMINATED', player: elimPlayer, votesCount: maxV, roleLabel: roleLbl },
+                    aiReferee: { message: `游戏结束！${winner === 'CIVILIAN' ? '平民阵营获胜！' : '卧底阵营逆袭获胜！'}`, timestamp: Date.now() }
+                });
+            } else {
+                await updateDoc(roomRef, {
+                    players: roomData.players,
+                    votes: votesMap,
+                    status: 'RESULT',
+                    pkPlayers: [],
+                    lastEliminated: { type: 'ELIMINATED', player: elimPlayer, votesCount: maxV, roleLabel: roleLbl },
+                    aiReferee: { message: `${elimPlayer.seat}号【${elimPlayer.name}】出局，真实身份是【${roleLbl}】！游戏继续！`, timestamp: Date.now() }
+                });
+            }
+        }
+
+        window.askAICoement = async function() {
+            if (!roomData) return;
+            const comments = ['先听描述，再看逻辑。说得多不一定就安全！', '别急着跟票，想想每个人的描述能否互相对上。', '描述用途、感觉或场景，但不要直接说出词语。'];
+            const message = comments[Math.floor(Math.random() * comments.length)];
+            await updateDoc(currentRoomCode, {aiReferee: {message, timestamp: Date.now()}});
+        };
+
+        window.backToLobby = async function() {
+            if (!roomData || roomData.hostId !== currentUser?.uid) return;
+            roomData.players = roomData.players.map(p => ({ ...p, role: null, word: null, isAlive: true, hasReadySeenCard: false, notes: [] }));
+            const roomRef = doc(db, 'artifacts', appId, 'public', 'data', 'rooms', currentRoomCode);
+            await updateDoc(roomRef, {
+                status: 'LOBBY',
+                round: 1,
+                wordPair: {civilian:'', undercover:'', hint:'', source:''},
+                currentSpeakerId: null,
+                speakingOrder: [],
+                players: roomData.players,
+                votes: {},
+                pkPlayers: [],
+                lastEliminated: null,
+                winner: null,
+                aiReferee: { message: '新的一局准备就绪！', timestamp: Date.now() }
+            });
+        };
+
+        window.leaveRoom = function() {
+            if (unsubscribeRoom) unsubscribeRoom();
+            clearInterval(timerInterval); timerInterval = null; timerTurn = '';
+            isPeekingCard = false;
+            window.speechSynthesis?.cancel();
+            currentRoomCode = '';
+            roomData = null;
+            render();
+        };
+
+        // ==========================================
+        // 7. 页面渲染引擎 (Vanilla JS UI)
+        // ==========================================
+        function render() {
+            const appEl = document.getElementById('app');
+            if (!appEl) return;
+
+            // 规则弹窗 HTML
+            const rulesModalHtml = showRulesModal ? `
+                <div class="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+                    <div class="bg-slate-900 border border-slate-700 rounded-3xl max-w-md w-full p-6 space-y-4 text-sm text-slate-300 shadow-2xl">
+                        <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                            <h3 class="text-lg font-bold text-white flex items-center gap-2">🏆 玩法指南</h3>
+                            <button onclick="toggleRules(false)" class="text-slate-400 hover:text-white">✕</button>
+                        </div>
+                        <div class="space-y-3 text-xs sm:text-sm leading-relaxed">
+                            <p><strong class="text-amber-300">1. 秘密看牌：</strong>传递同一台设备，轮流防窥看词，平民拿相同词，卧底拿相似词。</p>
+                            <p><strong class="text-amber-300">2. 线下轮流发言：</strong>按裁判提示，大家线下开口描述，禁报词中字。</p>
+                            <p><strong class="text-amber-300">3. 轮流秘密投票：</strong>每轮发言后传递设备投票，请其他人暂时回避。票数最高者出局，平票时进入 PK，PK 再平票则无人出局。</p>
+                            <p><strong class="text-amber-300">4. 胜负判定：</strong>平民找出所有卧底和白板获胜；卧底与白板存活人数达到平民人数时，卧底阵营获胜。白板至少 5 人可用。</p>
+                        </div>
+                        <button onclick="toggleRules(false)" class="w-full py-2.5 rounded-xl bg-amber-500 text-slate-950 font-bold">关闭</button>
+                    </div>
+                </div>
+            ` : '';
+
+            // 状态 1: 未加入房间 (大厅)
+            if (!currentRoomCode || !roomData) {
+                appEl.innerHTML = `
+                    <header class="relative z-10 flex items-center justify-between max-w-lg mx-auto w-full pt-4 px-4">
+                        <div class="flex items-center gap-2.5">
+                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-violet-600 flex items-center justify-center font-bold text-xl">🕵️‍♂️</div>
+                            <h1 class="text-lg font-black bg-gradient-to-r from-amber-200 to-violet-200 bg-clip-text text-transparent">谁是卧底 · 聚会版</h1>
+                        </div>
+                        <button onclick="toggleRules(true)" class="px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs text-slate-300">规则</button>
+                    </header>
+                    <main class="relative z-10 max-w-lg mx-auto w-full my-auto py-6 px-4 space-y-5">
+                        <div class="p-4 rounded-2xl bg-violet-950/60 border border-violet-500/30 flex items-start gap-3">
+                            <div class="text-3xl">🤖</div>
+                            <div class="text-xs space-y-1">
+                                <div class="font-bold text-violet-300">同屏聚会 · 自动主持</div>
+                                <p class="text-slate-300 leading-relaxed">4—12 人共用一台设备，轮流看牌与投票。内置词库、语音播报与自动计票，无需账号。</p>
+                            </div>
+                        </div>
+                        <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-2xl">
+                            <h2 class="text-sm font-bold text-slate-300">第一步：设置你的身份</h2>
+                            <div class="flex items-center gap-3">
+                                <div class="w-14 h-14 rounded-2xl bg-slate-800 border-2 border-amber-400 flex items-center justify-center text-3xl">${selectedAvatar}</div>
+                                <div class="flex-1">
+                                    <label class="text-xs text-slate-400 block mb-1">聚会昵称</label>
+                                    <input type="text" id="nickname-input" value="${escapeHtml(nickname)}" maxlength="10" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-white text-sm focus:outline-none focus:border-amber-400">
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-6 gap-2">
+                                ${AVATARS.map(emo => `<button onclick="setAvatar('${emo}')" class="py-2 rounded-xl text-xl bg-slate-950 border ${selectedAvatar === emo ? 'border-amber-400 bg-amber-500/20' : 'border-slate-800'}">${emo}</button>`).join('')}
+                            </div>
+                        </div>
+                        <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-2xl">
+                            <h2 class="text-sm font-bold text-slate-300">第二步：开始同屏聚会</h2>
+                            ${errorMsg ? `<div class="p-3 rounded-xl bg-rose-500/20 text-rose-200 text-xs">${escapeHtml(errorMsg)}</div>` : ''}
+                            <button onclick="createRoom()" class="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-500 to-rose-500 text-slate-950 font-black text-base shadow-lg">创建同屏聚会</button>
+                            ${localRoom ? '<button onclick="resumeRoom()" class="w-full py-3 rounded-2xl bg-violet-600 text-white font-bold text-sm">继续上次聚会</button>' : ''}
+                            <p class="text-xs text-slate-400 leading-relaxed">创建后添加朋友即可开局。当前版本为同屏玩法，房号仅作本机标识，不支持其他手机加入。</p>
+                        </div>
+                    </main>
+                    ${rulesModalHtml}
+                `;
+                return;
+            }
+
+            // 状态 2: 房间内部主界面
+            const isHost = roomData.hostId === currentUser?.uid;
+            const effId = activeControlId || currentUser?.uid;
+            const myPl = roomData.players.find(p => p.id === effId) || roomData.players[0];
+            const hasSim = roomData.players.some(p => p.isSimulated);
+            const aliveCount = roomData.players.filter(p => p.isAlive).length;
+            const currentSpk = roomData.players.find(p => p.id === roomData.currentSpeakerId);
+
+            appEl.innerHTML = `
+                <header class="sticky top-0 z-30 bg-slate-950/90 backdrop-blur-md border-b border-slate-800 px-4 py-2.5">
+                    <div class="max-w-2xl mx-auto flex items-center justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="px-3 py-1 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-300 font-mono font-bold text-sm">同屏: ${roomData.roomCode}</span>
+                            ${roomData.status !== 'LOBBY' ? `<span class="text-xs text-slate-400 hidden sm:inline">第 ${roomData.round} 轮 | 存活 ${aliveCount} 人</span>` : ''}
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button onclick="toggleTTS()" class="px-2.5 py-1.5 rounded-xl border text-xs ${ttsEnabled ? 'bg-violet-500/20 border-violet-400 text-violet-200' : 'bg-slate-900 border-slate-800 text-slate-500'}">${ttsEnabled ? '🔊 语音开' : '🔇 静音'}</button>
+                            <button onclick="leaveRoom()" class="p-1.5 rounded-xl bg-slate-900 border border-slate-800 text-rose-400">退出</button>
+                        </div>
+                    </div>
+                    ${hasSim ? `
+                        <div class="max-w-2xl mx-auto mt-2 pt-2 border-t border-slate-800 flex items-center gap-2 overflow-x-auto no-scrollbar text-xs">
+                            <span class="text-amber-400 font-semibold shrink-0">传给玩家:</span>
+                            ${roomData.players.map(p => `<button onclick="switchView('${p.id}')" class="px-2.5 py-1 rounded-lg shrink-0 ${myPl?.id === p.id ? 'bg-amber-400 text-slate-950 font-bold' : 'bg-slate-900 text-slate-400'}">${p.avatar} ${p.seat}号${escapeHtml(p.name)}</button>`).join('')}
+                        </div>
+                    ` : ''}
+                </header>
+
+                <main class="max-w-2xl mx-auto w-full px-4 pt-4 space-y-4 flex-1 pb-12">
+                    <!-- AI 裁判舞台 -->
+                    <section class="rounded-3xl bg-gradient-to-br from-violet-950/90 via-slate-900 to-slate-900 border border-violet-500/40 p-4 shadow-xl flex items-start gap-3.5">
+                        <div class="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-amber-500 p-0.5 shrink-0">
+                            <div class="w-full h-full bg-slate-950 rounded-[14px] flex items-center justify-center text-2xl">🤖</div>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center justify-between mb-1">
+                                <span class="text-xs font-bold text-violet-300">自动主持</span>
+                                ${roomData.status !== 'LOBBY' ? `<button onclick="askAICoement()" class="text-[11px] px-2.5 py-0.5 rounded-full bg-violet-500/20 border border-violet-400 text-violet-200">主持提醒</button>` : ''}
+                            </div>
+                            <p class="text-sm text-white font-medium">“${escapeHtml(roomData.aiReferee?.message || '欢迎来到谁是卧底聚会！')}”</p>
+                        </div>
+                    </section>
+
+                    ${errorMsg ? `<div class="p-3 rounded-xl bg-rose-500/20 text-rose-200 text-xs">${escapeHtml(errorMsg)}</div>` : ''}
+
+                    <!-- 聚会圆桌座位 -->
+                    <section class="bg-slate-900/80 border border-slate-800 rounded-3xl p-4 space-y-3">
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-xs font-bold uppercase text-slate-400">聚会圆桌座位 (${roomData.players.length}人)</h3>
+                            ${roomData.status === 'LOBBY' && isHost ? `<button onclick="addSimulatedPlayer()" class="px-3 py-1 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-xs font-bold">+ 添加同屏玩家</button>` : ''}
+                        </div>
+                        ${roomData.status === 'LOBBY' && isHost ? '<input id="friend-name-input" type="text" maxlength="10" aria-label="朋友昵称" placeholder="朋友昵称（可选），填写后点添加" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white">' : ''}
+                        <div class="grid grid-cols-3 sm:grid-cols-4 gap-2.5">
+                            ${roomData.players.map(p => {
+                                const isMe = p.id === myPl?.id;
+                                const isSpk = roomData.status === 'SPEAKING' && roomData.currentSpeakerId === p.id;
+                                const canVote = roomData.status === 'VOTING' && myPl?.isAlive && p.isAlive && p.id !== myPl.id && roomData.votes?.[myPl.id] === undefined && (!roomData.pkPlayers?.length || roomData.pkPlayers.includes(p.id));
+                                const myVote = null; // 已投票目标不在传递设备时显示。
+                                return `
+                                    <div onclick="${canVote ? `castVote('${p.id}')` : ''}" class="relative rounded-2xl p-3 border text-center transition flex flex-col items-center ${!p.isAlive ? 'opacity-40 grayscale bg-slate-950' : isSpk ? 'bg-amber-500/15 border-2 border-amber-400' : myVote === p.id ? 'bg-rose-500/20 border-2 border-rose-500' : canVote ? 'bg-slate-950 border-slate-700 cursor-pointer hover:border-rose-400' : 'bg-slate-950 border-slate-800'}">
+                                        <span class="absolute top-2 left-2 px-1 rounded text-[10px] font-mono ${isSpk ? 'bg-amber-400 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300'}">${p.seat}号</span>
+                                        ${roomData.status === 'LOBBY' && isHost && p.id !== currentUser?.uid ? `<button onclick="removePlayer('${p.id}')" class="absolute top-1.5 right-1.5 text-slate-500 hover:text-rose-400 text-xs">✕</button>` : ''}
+                                        <div class="text-3xl my-1 relative">${p.avatar}</div>
+                                        <div class="text-xs font-bold text-slate-200 truncate w-full">${escapeHtml(p.name)}</div>
+                                        ${isMe ? `<span class="text-[10px] px-1 rounded bg-amber-400/20 text-amber-300 mt-0.5">当前视角</span>` : ''}
+                                        ${(!p.isAlive || roomData.status === 'GAME_OVER') && p.role ? `<div class="mt-1 px-1.5 py-0.5 rounded text-[10px] font-bold ${p.role === 'CIVILIAN' ? 'bg-emerald-500/20 text-emerald-300' : 'bg-rose-500/30 text-rose-300'}">${p.role === 'CIVILIAN' ? '平民' : p.role === 'UNDERCOVER' ? '卧底' : '白板'} ${roomData.status === 'GAME_OVER' && p.role !== 'BLANK' ? `· ${escapeHtml(p.word)}` : ''}</div>` : ''}
+                                    </div>
+                                `;
+                            }).join('')}
+                        </div>
+                    </section>
+
+                    <!-- 阶段控制台 -->
+                    ${roomData.status === 'LOBBY' ? `
+                        <section class="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-4">
+                            <h2 class="text-sm font-bold text-white">聚会设置与词库</h2>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                                <div>
+                                    <label class="text-slate-400 block mb-1">词库主题</label>
+                                    <div class="space-y-1.5">
+                                        ${Object.entries(WORD_LIBRARY).map(([k, cat]) => `<button ${!isHost ? 'disabled' : ''} onclick="updateSetting('category', '${k}')" class="w-full px-3 py-2 rounded-xl border text-left flex justify-between ${roomData.settings.category === k ? 'bg-amber-500/20 border-amber-400 text-amber-200' : 'bg-slate-950 border-slate-800 text-slate-400'}"><span>${cat.name}</span></button>`).join('')}
+                                    </div>
+                                </div>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="text-slate-400 block mb-1">卧底人数</label>
+                                        <div class="flex gap-2">
+                                            ${[1, 2, 3].map(n => `<button ${!isHost ? 'disabled' : ''} onclick="updateSetting('undercoverCount', ${n})" class="flex-1 py-2 rounded-xl border font-bold ${roomData.settings.undercoverCount === n ? 'bg-rose-500/20 border-rose-400 text-rose-300' : 'bg-slate-950 border-slate-800 text-slate-400'}">${n}人</button>`).join('')}
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="text-slate-400 block mb-1">白板角色</label>
+                                        <button ${!isHost ? 'disabled' : ''} onclick="updateSetting('hasBlank', ${!roomData.settings.hasBlank})" class="w-full py-2 px-3 rounded-xl border flex justify-between ${roomData.settings.hasBlank ? 'bg-violet-500/20 border-violet-400 text-violet-200' : 'bg-slate-950 border-slate-800 text-slate-400'}"><span>混入白板</span><span class="font-bold">${roomData.settings.hasBlank ? '开启' : '关闭'}</span></button>
+                                    </div>
+                                </div>
+                            </div>
+                            ${isHost ? `
+                                <button onclick="startGame(false)" class="w-full py-4 rounded-2xl bg-gradient-to-r from-amber-400 to-rose-500 text-slate-950 font-black text-base shadow-xl">立即发牌开局 (${roomData.players.length}人)</button>
+                            ` : `<div class="text-center py-3 text-sm text-amber-300 animate-pulse">等待房主发牌...</div>`}
+                        </section>
+                    ` : ''}
+
+                    ${roomData.status === 'DEALING' && myPl ? `
+                        <section class="bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center space-y-4">
+                            <span class="px-3 py-1 rounded-full bg-amber-500/15 text-amber-300 text-xs font-bold">防窥看牌阶段</span>
+                            <h2 class="text-lg font-black text-white">${myPl.seat}号【${escapeHtml(myPl.name)}】的底牌</h2>
+                            <div id="secret-card" role="button" tabindex="0" aria-label="按住查看底牌，松开隐藏" onpointerdown="event.preventDefault();setPeek(true)" onkeydown="if(event.code==='Space'||event.code==='Enter'){event.preventDefault();setPeek(true)}" onkeyup="setPeek(false)" onblur="setPeek(false)" oncontextmenu="return false" class="max-w-xs mx-auto h-44 rounded-3xl border-2 border-amber-400 bg-gradient-to-br from-amber-500/20 to-slate-900 flex flex-col items-center justify-center p-6 cursor-pointer shadow-2xl select-none">
+                                <div id="secret-hidden" class="space-y-2"><div class="text-2xl">🔒</div><div class="text-sm font-bold text-slate-200">按住查看，松开隐藏</div></div>
+                                <div id="secret-visible" hidden class="space-y-2"><div class="text-xs text-slate-400">你的秘密词语是：</div><div id="secret-word" class="text-3xl font-black tracking-widest text-amber-300"></div><div class="text-[10px] text-slate-500">松开立即隐藏</div></div>
+                            </div>
+                            <button onclick="confirmSeenCard()" ${myPl.hasReadySeenCard ? 'disabled' : ''} class="w-full max-w-sm mx-auto py-3.5 rounded-2xl bg-emerald-500 text-slate-950 font-black text-sm shadow-lg">${myPl.hasReadySeenCard ? '✓ 已准备，等待其他人...' : '我已记住词语，准备发言！'}</button>
+                        </section>
+                    ` : ''}
+
+                    ${roomData.status === 'SPEAKING' && currentSpk ? `
+                        <section class="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-4">
+                            <div class="flex justify-between items-center">
+                                <span class="px-3 py-1 rounded-lg bg-amber-500/20 text-amber-300 text-xs font-bold">第 ${roomData.round} 轮 · 线下描述</span>
+                                <div id="timer-badge" class="px-3 py-1 rounded-full font-mono text-sm font-black bg-slate-950 text-amber-300">${timeLeft}s</div>
+                            </div>
+                            <div class="p-5 rounded-2xl bg-slate-950 border border-amber-500/40 text-center space-y-2">
+                                <div class="text-4xl">${currentSpk.avatar}</div>
+                                <div class="text-lg font-black text-white">请 <span class="text-amber-300">${currentSpk.seat}号【${escapeHtml(currentSpk.name)}】</span> 线下开口描述</div>
+                            </div>
+                            ${myPl?.id === currentSpk.id || isHost ? `
+                                <div class="space-y-2">
+                                    <input type="text" id="speaker-keyword-input" placeholder="可选：记录TA说的关键词" class="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-white">
+                                    <button onclick="finishSpeaking()" class="w-full py-3 rounded-2xl bg-amber-400 text-slate-950 font-black text-sm">发言完毕，下一位 →</button>
+                                </div>
+                            ` : `<div class="text-center text-xs text-slate-400">请倾听 ${currentSpk.seat}号 发言...</div>`}
+                        </section>
+                    ` : ''}
+
+                    ${roomData.status === 'VOTING' ? `
+                        <section class="bg-slate-900 border border-rose-500/40 rounded-3xl p-5 space-y-3 text-center">
+                            <h3 class="text-base font-black text-rose-300">🛡️ 轮流秘密投票</h3>
+                            <p class="text-xs text-amber-300">已投 ${Object.keys(roomData.votes || {}).length} / ${aliveCount} 票 ${roomData.votes?.[myPl?.id] !== undefined ? '· 你已投票，请传给下一位' : ''}</p>
+                            <p class="text-xs text-slate-400">${escapeHtml(myPl?.name)}，请点击上方你怀疑的玩家头像。投票立即锁定，再把设备交给下一位。</p>
+                            ${myPl?.isAlive && roomData.votes?.[myPl.id] === undefined ? `<button onclick="castVote('ABSTAIN')" class="px-4 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-slate-300">本轮弃票</button>` : ''}
+                        </section>
+                    ` : ''}
+
+                    ${roomData.status === 'RESULT' ? `
+                        <section class="bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center space-y-4">
+                            <h3 class="text-xl font-black text-white">${escapeHtml(roomData.lastEliminated?.reason || '本轮结果公布')}</h3>
+                            ${isHost ? `<button onclick="startNextRound()" class="w-full py-3.5 rounded-2xl bg-amber-400 text-slate-950 font-black text-sm">进入下一轮发言 →</button>` : `<div class="text-xs text-slate-400">等待房主开启下一轮...</div>`}
+                        </section>
+                    ` : ''}
+
+                    ${roomData.status === 'GAME_OVER' ? `
+                        <section class="bg-gradient-to-br from-slate-900 to-violet-950 border-2 border-amber-400 rounded-3xl p-6 text-center space-y-4 shadow-2xl">
+                            <h2 class="text-2xl font-black text-white">${roomData.winner === 'CIVILIAN' ? '🎉 平民阵营获胜！' : '🕵️‍♂️ 卧底阵营获胜！'}</h2>
+                            <div class="grid grid-cols-2 gap-3 max-w-md mx-auto text-xs">
+                                <div class="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30">平民词：<strong class="text-white text-base block">${escapeHtml(roomData.wordPair?.civilian)}</strong></div>
+                                <div class="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30">卧底词：<strong class="text-white text-base block">${escapeHtml(roomData.wordPair?.undercover)}</strong></div>
+                            </div>
+                            ${isHost ? `<button onclick="backToLobby()" class="w-full py-3.5 rounded-2xl bg-amber-400 text-slate-950 font-black text-sm">返回重新开局</button>` : ''}
+                        </section>
+                    ` : ''}
+                </main>
+                ${rulesModalHtml}
+            `;
+        }
+
+        window.setPeek = function(val) {
+            isPeekingCard = !!val && roomData?.status === 'DEALING';
+            const hidden = document.getElementById('secret-hidden');
+            const visible = document.getElementById('secret-visible');
+            const word = document.getElementById('secret-word');
+            if (hidden) hidden.hidden = isPeekingCard;
+            if (visible) visible.hidden = !isPeekingCard;
+            if (word) word.textContent = isPeekingCard ? (roomData.players.find(p => p.id === activeControlId)?.word || '') : '';
+        };
+        window.addEventListener('pointerup', () => window.setPeek(false));
+        window.addEventListener('pointercancel', () => window.setPeek(false));
+        window.addEventListener('blur', () => window.setPeek(false));
+        document.addEventListener('visibilitychange', () => { if (document.hidden) window.setPeek(false); });
+        window.switchView = function(pid) { activeControlId = pid; isPeekingCard = false; render(); };
+        window.toggleTTS = function() { ttsEnabled = !ttsEnabled; render(); };
+        window.toggleRules = function(val) { showRulesModal = val; render(); };
+        window.setAvatar = function(emo) { nickname = document.getElementById('nickname-input')?.value.trim() || nickname; selectedAvatar = emo; render(); };
+        window.startNextRound = async function() {
+            if (!roomData || roomData.hostId !== currentUser?.uid || roomData.status !== 'RESULT') return;
+            await startSpeakingRound(roomData.players, (roomData.round || 1) + 1, []);
+        };
+
+        // 启动应用
+        initApp();
+    </script>
+</body>
+</html>
