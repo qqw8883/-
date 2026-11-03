@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function member(appId, code) {
+      return request.auth != null
+        && request.auth.uid in get(/databases/$(database)/documents/games/$(appId)/rooms/$(code)).data.memberIds;
+    }
+    match /games/{appId}/rooms/{code} {
+      allow get: if request.auth != null && request.auth.uid in resource.data.memberIds;
+      allow list, write: if false;
+      match /hands/{uid} {
+        allow get: if request.auth != null && request.auth.uid == uid && member(appId, code);
+        allow list, write: if false;
+      }
+    }
+    // Server state, quotas, legacy documents and every other path stay private.
+    match /{path=**} { allow read, write: if false; }
+  }
+}

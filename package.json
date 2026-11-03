@@ -1,0 +1,22 @@
+{
+  "name": "undercover-party",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "test:emulator": "firebase emulators:exec --project demo-undercover --only auth,firestore \"GCLOUD_PROJECT=demo-undercover node --test tests/emulator.integration.mjs\""
+  },
+  "dependencies": {
+    "firebase": "13.2.0",
+    "lucide-react": "1.67.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "firebase-tools": "14.12.0",
+    "tailwindcss": "3.4.17"
+  }
+}

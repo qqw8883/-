@@ -1,0 +1,5 @@
+{
+  "functions": [{"source": "functions", "codebase": "undercover", "ignore": ["node_modules", "*-debug.log", ".env.example"]}],
+  "firestore": {"rules": "firestore.rules"},
+  "emulators": {"auth": {"port": 9099}, "functions": {"port": 5001}, "firestore": {"port": 8080}, "ui": {"enabled": false}}
+}
